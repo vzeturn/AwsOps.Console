@@ -1,0 +1,48 @@
+{
+  "agent": {
+    "metrics_collection_interval": 300
+  },
+  "metrics": {
+    "namespace": "CWAgent",
+    "aggregation_dimensions": [["InstanceId"]],
+    "append_dimensions": {
+      "InstanceId": "${aws:InstanceId}"
+    },
+    "metrics_collected": {
+      "mem": {
+        "measurement": [
+          { "name": "used_percent", "unit": "Percent" }
+        ]
+      },
+      "swap": {
+        "measurement": [
+          { "name": "used_percent", "unit": "Percent" }
+        ]
+      },
+      "disk": {
+        "resources": ["/"],
+        "drop_device": true,
+        "measurement": [
+          { "name": "used_percent", "unit": "Percent" },
+          { "name": "inodes_free", "unit": "Count" }
+        ],
+        "drop_original_metrics": ["disk_used_percent", "disk_inodes_free"]
+      },
+      "ethtool": {
+        "interface_include": ["ens5"],
+        "metrics_include": [
+          "bw_in_allowance_exceeded",
+          "bw_out_allowance_exceeded",
+          "pps_allowance_exceeded",
+          "conntrack_allowance_exceeded"
+        ]
+      },
+      "procstat": [
+        { "pattern": "nginx", "measurement": ["pid_count"] },
+        { "pattern": "mysqld", "measurement": ["pid_count"] },
+        { "pattern": "php-fpm|php", "measurement": ["pid_count"] },
+        { "pattern": "wp-cron|wp_cron", "measurement": ["pid_count"] }
+      ]
+    }
+  }
+}

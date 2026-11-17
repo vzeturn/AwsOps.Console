@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Daily expiry of EBS and RDS manual snapshots. A snapshot is deleted ONLY when it carries a DeleteAfter tag
+  (YYYY-MM-DD) that is today or earlier - untagged snapshots are never touched (enforced by both the code and IAM).
+  Invoke with {"dryRun": true} to list what would be deleted.
+
+Resources:
+  ExpiryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: abc-prod-snapshot-expiry-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - { Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: 'sts:AssumeRole' }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: abc-prod-snapshot-expiry-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - { Sid: Describe, Effect: Allow, Action: ['ec2:DescribeSnapshots', 'rds:DescribeDBSnapshots'], Resource: '*' }
+              - Sid: DeleteEbsTaggedOnly
+                Effect: Allow
+                Action: 'ec2:DeleteSnapshot'
+                Resource: '*'
+                Condition: { 'Null': { 'aws:ResourceTag/DeleteAfter': 'false' } }
+              - Sid: DeleteRdsTaggedOnly
+                Effect: Allow
+                Action: 'rds:DeleteDBSnapshot'
+                Resource: '*'
+                Condition: { 'Null': { 'aws:ResourceTag/DeleteAfter': 'false' } }
+
+  ExpiryFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: abc-prod-snapshot-expiry-fn
+      Description: Deletes EBS/RDS manual snapshots whose DeleteAfter tag date has passed.
+      Runtime: nodejs22.x
+      Handler: index.handler
+      Role: !GetAtt ExpiryRole.Arn
+      Timeout: 300
+      MemorySize: 256
+      Code:
+        ZipFile: |
+          const { EC2Client, DescribeSnapshotsCommand, DeleteSnapshotCommand } = require('@aws-sdk/client-ec2');
+          const { RDSClient, DescribeDBSnapshotsCommand, DeleteDBSnapshotCommand } = require('@aws-sdk/client-rds');
+          const ec2 = new EC2Client({}), rds = new RDSClient({});
+          const due = (v, today) => /^\d{4}-\d{2}-\d{2}$/.test(v || '') && v <= today;
+          exports.handler = async (event = {}) => {
+            const dryRun = event.dryRun === true;
+            const today = new Date().toISOString().slice(0, 10);
+            const out = { today, dryRun, deleted: [], failed: [] };
+            const del = async (kind, id, fn) => {
+              if (dryRun) return out.deleted.push(`${kind}:${id}`);
+              try { await fn(); out.deleted.push(`${kind}:${id}`); }
+              catch (e) { out.failed.push(`${kind}:${id}: ${e.name}`); console.error(kind, id, e.name, e.message); }
+            };
+            let token;
+            do {
+              const r = await ec2.send(new DescribeSnapshotsCommand({ OwnerIds: ['self'], Filters: [{ Name: 'tag-key', Values: ['DeleteAfter'] }], NextToken: token }));
+              for (const s of r.Snapshots || []) {
+                const tag = (s.Tags || []).find((t) => t.Key === 'DeleteAfter');
+                if (due(tag && tag.Value, today)) await del('ebs', s.SnapshotId, () => ec2.send(new DeleteSnapshotCommand({ SnapshotId: s.SnapshotId })));
+              }
+              token = r.NextToken;
+            } while (token);
+            let marker;
+            do {
+              const r = await rds.send(new DescribeDBSnapshotsCommand({ SnapshotType: 'manual', Marker: marker }));
+              for (const s of r.DBSnapshots || []) {
+                const tag = (s.TagList || []).find((t) => t.Key === 'DeleteAfter');
+                if (due(tag && tag.Value, today)) await del('rds', s.DBSnapshotIdentifier, () => rds.send(new DeleteDBSnapshotCommand({ DBSnapshotIdentifier: s.DBSnapshotIdentifier })));
+              }
+              marker = r.Marker;
+            } while (marker);
+            console.log(JSON.stringify(out));
+            if (out.failed.length) throw new Error(`snapshot expiry failed for ${out.failed.length}: ${out.failed.join('; ')}`);
+            return out;
+          };
+
+  ExpiryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/abc-prod-snapshot-expiry-fn
+      RetentionInDays: 90
+
+  ExpiryRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: abc-prod-snapshot-expiry-daily
+      Description: Daily 03:00 Asia/Ho_Chi_Minh (20:00 UTC) snapshot expiry sweep.
+      ScheduleExpression: 'cron(0 20 * * ? *)'
+      State: ENABLED
+      Targets:
+        - { Id: expiry-fn, Arn: !GetAtt ExpiryFunction.Arn }
+
+  ExpiryInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ExpiryFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ExpiryRule.Arn
+
+Outputs:
+  ExpiryFunctionName:
+    Value: !Ref ExpiryFunction

@@ -1,0 +1,19 @@
+{
+  "name": "@ops-dashboard/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "cd .. && eslint shared",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "fast-check": "4.9.0",
+    "typescript": "^5.6.3",
+    "vitest": "^3.2.7"
+  }
+}

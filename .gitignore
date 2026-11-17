@@ -1,0 +1,51 @@
+node_modules/
+dist/
+coverage/
+*.log
+.claude/settings.local.json
+# TypeScript project-references build cache, written by `tsc -b`. Machine-local, and it records
+# absolute paths, so committing it causes spurious diffs between machines.
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+infra/out.yaml
+infra/site/
+infra/build/
+# Wrangler's local state/cache for the Cloudflare frontend deployment (see
+# infra/deploy-frontend-cloudflare.sh). Machine-local, not shared.
+.wrangler/
+.DS_Store
+.worktrees/
+infra/new-keys-*.json
+*.txt
+
+# Throwaway output from ad-hoc AWS surveys. This is the convention actually in use on this repo — as of
+# 2026-09-08 there were ten such files at the root totalling ~24 MB (.tmp-survey.json, .tmp-verify*.json,
+# .tmp-keys*.json ...). Checked on that date: none contained a credential and none had ever been committed,
+# so this is prevention rather than cleanup.
+#
+# It is worth preventing because the pattern is the same one that produced the infra/new-keys-*.json
+# incident above: a survey is dumped next to the code, gets forgotten, and is a single `git add .` away from
+# the history. The names show these are dumps of live account state, and the next one could just as easily
+# be a survey of IAM or Secrets Manager.
+.tmp-*
+
+# Single scratch folder for all ad-hoc/debug output going forward (SSM command results, CloudTrail dumps,
+# git diff/status snapshots, typecheck logs, etc.) instead of dropping loose .tmpNN-*.txt / _foo.json files
+# at the repo root. Root was swept clean of ~27 such files on 2026-09-17; put new throwaway output here.
+.tmp/
+
+# RDS logs downloaded for diagnosis; do not commit (may contain business data)
+infra/logs/
+
+# SSH key material. Private keys belong in Secrets Manager, never next to the code.
+*.pem
+*.pub
+
+# TLS certificate material. Keep it in Secrets Manager / SSM Parameter Store or on the target server.
+*.key
+*.pfx
+*.p12
+_.*/
+

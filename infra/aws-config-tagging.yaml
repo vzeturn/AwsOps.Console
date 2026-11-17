@@ -1,0 +1,266 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Standalone stack (independent from ops-dashboard.yaml): AWS Config, scoped to a fixed allow-list
+  of resource types, plus 1 managed rule (REQUIRED_TAGS) checking Department/Environment/Owner/
+  ManagedBy on every recorded resource. Governance/tagging-enforcement infrastructure, not part of
+  the ops-dashboard application itself - kept in its own template/stack so it can be deployed,
+  updated, or torn down independently (see infra/deploy-aws-config-tagging.ps1).
+
+# --- Cost note (kept out of Description; CloudFormation caps Description at 1024 chars) ---
+#
+# AWS Config bills per configuration item RECORDED and per rule EVALUATION - see
+# https://aws.amazon.com/config/pricing/. This template keeps the bill small on purpose:
+#
+#   1. `RecordingGroup` uses an explicit ResourceTypes allow-list (NOT AllSupported): only the
+#      resource types that are tagged for cost/governance purposes (EC2 instance, EBS volume, EIP,
+#      Security Group, RDS DBInstance, S3 Bucket). Recording "AllSupported" would also capture
+#      thousands of AMIs/snapshots/OpsItems in a typical account, each one an additional recorded
+#      configuration item, for resource types nobody reads a compliance status from.
+#   2. `RecordingMode` = DAILY (periodic) rather than CONTINUOUS: tagged resources rarely change
+#      configuration (see README.md's cost philosophy: "every billed AWS API is called on a
+#      SCHEDULE, never on the user request path"); 1 configuration item/resource/day is enough to
+#      catch a missing/wrong tag within 24h without paying for every attribute change through the
+#      day. See "Best practices for analyzing AWS Config recording frequencies" (AWS blog) and the
+#      CloudFormation AWS::Config::ConfigurationRecorder RecordingMode property.
+#   3. The REQUIRED_TAGS managed rule (no Lambda, no per-request billing beyond the
+#      $0.001/evaluation counted above) is evaluated through the daily recording cadence; there is
+#      no reason to evaluate more often than configuration items are refreshed.
+#
+# Estimate (not measured; depends on your resource count): with N recorded resources, periodic
+# recording costs at most N configuration items/day * $0.012 * 30 days (worst case, if every
+# resource changes every day), plus about N rule evaluations/day * $0.001. For N = 120 that is
+# roughly $43/month worst case for recording and $3.6/month for evaluations. Periodic recording
+# bills only when something changed, and most long-lived resources rarely change, so the real bill
+# is usually far lower.
+Parameters:
+  Org:
+    Type: String
+    Default: abc
+  Project:
+    Type: String
+    Default: ops-dashboard
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+  CommonRequiredTagKeys:
+    Type: CommaDelimitedList
+    Default: 'Department,Environment,Owner,ManagedBy,Lifecycle'
+    Description: >-
+      Tags required on EVERY recorded resource type, regardless of scope tier (5 keys, within the
+      REQUIRED_TAGS managed rule's 6-key limit). Department
+      (business-unit cost allocation), Environment (Prod/Staging/UAT/NonProd/Dev/Sandbox), Owner
+      (responsible team/alias), ManagedBy (Console/CloudFormation/Terraform/...), Lifecycle
+      (active/deprecated/decommissioned).
+  ExtendedRequiredTagKeys:
+    Type: CommaDelimitedList
+    Default: 'DataClass,BackupTier'
+    Description: >-
+      Additional tags required ONLY on resource types that hold data or need a backup posture
+      (EC2 instance/volume, RDS, S3 - the "7-tag scope"). NOT required on network/orchestration
+      resource types with no inherent "data" or "backup" concept (EIP, SecurityGroup - the "5-tag
+      scope"), where forcing a value would be meaningless.
+
+Resources:
+  # --- IAM role AWS Config assumes to call Describe*/List* on every recorded resource type and to
+  # write configuration snapshots/history to the S3 bucket below. Uses the AWS managed policy
+  # (AWS_ConfigRole) rather than a hand-rolled one - this is exactly the use case that managed
+  # policy exists for, and hand-rolling it would mean re-deriving the same Describe/List permission
+  # list AWS already maintains across 300+ resource types. ---
+  ConfigRecorderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Org}-${Project}-${Environment}-config-recorder-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: config.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWS_ConfigRole
+      Policies:
+        - PolicyName: write-config-snapshots
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub '${ConfigBucket.Arn}/AWSLogs/${AWS::AccountId}/Config/*'
+                Condition:
+                  StringEquals: { 's3:x-amz-acl': 'bucket-owner-full-control' }
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketAcl
+                Resource: !GetAtt ConfigBucket.Arn
+
+  # --- S3 bucket for configuration snapshots/history (required by AWS::Config::DeliveryChannel).
+  # Small, infrequently-written objects - standard S3 rates apply (negligible next to the Config
+  # per-item/per-evaluation charges above). Lifecycle rule keeps this from growing unbounded. ---
+  ConfigBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub '${Org}-${Project}-${Environment}-config-snapshots'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-snapshots
+            Status: Enabled
+            ExpirationInDays: 90
+      Tags:
+        - { Key: Department, Value: SHARED }
+        - { Key: Environment, Value: Prod }
+        - { Key: Owner, Value: platform }
+        - { Key: ManagedBy, Value: CloudFormation }
+
+  ConfigBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ConfigBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AWSConfigBucketPermissionsCheck
+            Effect: Allow
+            Principal: { Service: config.amazonaws.com }
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt ConfigBucket.Arn
+          - Sid: AWSConfigBucketDelivery
+            Effect: Allow
+            Principal: { Service: config.amazonaws.com }
+            Action: s3:PutObject
+            Resource: !Sub '${ConfigBucket.Arn}/AWSLogs/${AWS::AccountId}/Config/*'
+            Condition:
+              StringEquals: { 's3:x-amz-acl': 'bucket-owner-full-control' }
+
+  # --- The recorder itself. `RecordingGroup.ResourceTypes` is an EXPLICIT allow-list (see cost note
+  # above) - add a type here only when there's an actual governance reason to track its compliance
+  # status, not by default. `RecordingMode` = DAILY keeps the periodic (cheaper) billing tier. ---
+  ConfigRecorder:
+    Type: AWS::Config::ConfigurationRecorder
+    Properties:
+      Name: !Sub '${Org}-${Project}-${Environment}-recorder'
+      RoleARN: !GetAtt ConfigRecorderRole.Arn
+      RecordingGroup:
+        AllSupported: false
+        IncludeGlobalResourceTypes: false
+        ResourceTypes:
+          - 'AWS::EC2::Instance'
+          - 'AWS::EC2::Volume'
+          - 'AWS::EC2::EIP'
+          - 'AWS::EC2::SecurityGroup'
+          - 'AWS::RDS::DBInstance'
+          - 'AWS::S3::Bucket'
+      RecordingMode:
+        RecordingFrequency: DAILY
+
+  ConfigDeliveryChannel:
+    Type: AWS::Config::DeliveryChannel
+    Properties:
+      Name: !Sub '${Org}-${Project}-${Environment}-delivery-channel'
+      S3BucketName: !Ref ConfigBucket
+      ConfigSnapshotDeliveryProperties:
+        DeliveryFrequency: TwentyFour_Hours
+
+  # --- Two REQUIRED_TAGS managed rules (5-tag scope and 7-tag scope), no custom Lambda, evaluated on the same 24h
+  # cadence as recording (via periodic recording re-triggering, see the NOTE at the bottom).
+  # Depends explicitly on the recorder + delivery channel both existing first (AWS Config rejects
+  # rule creation before a recorder is set up).
+  #
+  # Rule 1/2 - CommonRequiredTagsRule: the 5 tags every recorded resource type must carry
+  # (Department/Environment/Owner/ManagedBy/Lifecycle), scoped to ALL 6 resource types this
+  # stack's recorder tracks. ---
+  CommonRequiredTagsRule:
+    Type: AWS::Config::ConfigRule
+    DependsOn:
+      - ConfigRecorder
+      - ConfigDeliveryChannel
+    Properties:
+      ConfigRuleName: !Sub '${Org}-${Project}-${Environment}-required-tags-common'
+      Description: >-
+        Flags any recorded resource (EC2 instance/volume/EIP/security group, RDS instance, S3
+        bucket) missing one of the 5 tags required on EVERY resource type - see
+        Parameters.CommonRequiredTagKeys.
+      # `Scope` explicitly limits evaluation to the SAME 6 resource types this stack's recorder
+      # actually records. Without this, REQUIRED_TAGS is account-wide by default and also
+      # evaluates configuration items that pre-date this stack (for example AWS::CloudFormation::Stack /
+      # AWS::CodeBuild::Project items left over from other AWS Config activity such as AWS Quick
+      # Setup's own compliance tracking) - noisy false positives for resource types nobody asked this
+      # rule to police.
+      Scope:
+        ComplianceResourceTypes:
+          - 'AWS::EC2::Instance'
+          - 'AWS::EC2::Volume'
+          - 'AWS::EC2::EIP'
+          - 'AWS::EC2::SecurityGroup'
+          - 'AWS::RDS::DBInstance'
+          - 'AWS::S3::Bucket'
+      Source:
+        Owner: AWS
+        SourceIdentifier: REQUIRED_TAGS
+      InputParameters:
+        !Sub
+          - >-
+            {"tag1Key":"${Tag1}","tag2Key":"${Tag2}","tag3Key":"${Tag3}","tag4Key":"${Tag4}","tag5Key":"${Tag5}"}
+          - Tag1: !Select [0, !Ref CommonRequiredTagKeys]
+            Tag2: !Select [1, !Ref CommonRequiredTagKeys]
+            Tag3: !Select [2, !Ref CommonRequiredTagKeys]
+            Tag4: !Select [3, !Ref CommonRequiredTagKeys]
+            Tag5: !Select [4, !Ref CommonRequiredTagKeys]
+      # NOTE: no MaximumExecutionFrequency here - REQUIRED_TAGS is a change-triggered managed rule
+      # (AWS Config rejects setting an execution frequency on it: "only a change in resources
+      # triggers this managed rule"). This is fine for the DAILY/periodic recording mode configured
+      # above: periodic recording writes a fresh configuration item for every recorded resource
+      # once per day REGARDLESS of whether anything changed, and that periodic configuration item
+      # is itself a "change" that re-triggers this rule - so compliance is still re-checked daily,
+      # just via the recording cadence rather than a rule-level schedule.
+
+  # Rule 2/2 - ExtendedRequiredTagsRule: DataClass + BackupTier, scoped to ONLY the resource types
+  # in the "7-tag scope" (EC2 instance/volume, RDS, S3 - types that hold data or need a backup
+  # posture). Deliberately excludes AWS::EC2::EIP and AWS::EC2::SecurityGroup - those are the
+  # "5-tag scope" (network/orchestration resources with no inherent data/backup concept) and are
+  # NOT required to carry DataClass/BackupTier at all.
+  ExtendedRequiredTagsRule:
+    Type: AWS::Config::ConfigRule
+    DependsOn:
+      - ConfigRecorder
+      - ConfigDeliveryChannel
+    Properties:
+      ConfigRuleName: !Sub '${Org}-${Project}-${Environment}-required-tags-extended'
+      Description: >-
+        Flags any recorded EC2 instance/volume, RDS instance, or S3 bucket missing DataClass or
+        BackupTier - the 2 extra tags required only on resource types that hold data or need a
+        backup posture (the "7-tag scope"). See Parameters.ExtendedRequiredTagKeys.
+      Scope:
+        ComplianceResourceTypes:
+          - 'AWS::EC2::Instance'
+          - 'AWS::EC2::Volume'
+          - 'AWS::RDS::DBInstance'
+          - 'AWS::S3::Bucket'
+      Source:
+        Owner: AWS
+        SourceIdentifier: REQUIRED_TAGS
+      InputParameters:
+        !Sub
+          - '{"tag1Key":"${Tag1}","tag2Key":"${Tag2}"}'
+          - Tag1: !Select [0, !Ref ExtendedRequiredTagKeys]
+            Tag2: !Select [1, !Ref ExtendedRequiredTagKeys]
+
+Outputs:
+  ConfigRecorderName:
+    Value: !Ref ConfigRecorder
+  CommonRequiredTagsRuleName:
+    Value: !Ref CommonRequiredTagsRule
+  ExtendedRequiredTagsRuleName:
+    Value: !Ref ExtendedRequiredTagsRule
+  ConfigBucketName:
+    Value: !Ref ConfigBucket

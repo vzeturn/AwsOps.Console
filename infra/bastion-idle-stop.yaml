@@ -1,0 +1,202 @@
+# Full details (comments do not count toward the 1024-character limit of Description):
+#
+# Idle-based auto-stop for a Windows RDP bastion host. The bastion does NOT need a fixed
+# start/stop window: it should auto-stop after 30 minutes with no real usage and stay stopped until
+# someone starts it on demand (via the ops-dashboard console or the AWS Console/CLI). There is
+# deliberately NO auto-start/wake mechanism here, because a bastion is an on-demand break-glass
+# host, not a service with inbound traffic to react to.
+#
+# IDLE SIGNAL: this bastion has no CloudWatch Agent (Windows, and no ALB/target-group request
+# metric to key off). The only usage signal available from STANDARD EC2 metrics (no agent
+# required, no extra cost) is NetworkIn: an active RDP session continuously exchanges
+# keystrokes/screen updates, while a genuinely idle instance (nobody connected) sends only a
+# trickle of background OS traffic (Windows Update checks, NTP...). The threshold (500 KB over a
+# trailing 30-minute window) is set generously above typical idle background traffic to avoid a
+# false-positive stop while someone is connected but momentarily not typing or moving the mouse.
+#
+# Runs every 5 minutes (EventBridge Scheduler rate expression). That is cheap enough (12 CloudWatch
+# GetMetricStatistics calls/hour, 1 conditional StopInstances) that a tighter interval is not worth
+# the added complexity for a single bastion host.
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Idle-based auto-stop (NOT a fixed schedule) for abc-prod-bastion. Stops the instance after
+  IdleMinutes with NetworkIn below NetworkInIdleThresholdBytes. No auto-start/wake -- start on
+  demand only. Standalone stack, independent from ops-dashboard.yaml.
+
+Parameters:
+  BastionInstanceId:
+    Type: String
+    Default: i-0a1b2c3d4e5f60006
+    Description: abc-prod-bastion instance id (Windows RDP bastion).
+  IdleMinutes:
+    Type: Number
+    Default: 30
+    Description: Stop after this many minutes with NetworkIn below the threshold.
+  GraceMinutes:
+    Type: Number
+    Default: 10
+    Description: Never stop an instance that started less than this many minutes ago (prevents flapping right after a manual start).
+  NetworkInIdleThresholdBytes:
+    Type: Number
+    Default: 512000
+    Description: Trailing-window NetworkIn (bytes) below which the bastion is considered idle (500 KB default, well above typical idle OS background traffic).
+
+Resources:
+  BastionIdleStopRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: abc-prod-bastion-idle-stop-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: bastion-idle-stop
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/abc-prod-bastion-idle-stop:*"
+              - Effect: Allow
+                Action: cloudwatch:GetMetricStatistics
+                Resource: "*"
+              # ec2:DescribeInstances does NOT support resource-level permissions (AWS-documented
+              # limitation: it must always be Resource: "*"; scoping it to an instance ARN like
+              # StopInstances below silently causes UnauthorizedOperation at call time).
+              - Effect: Allow
+                Action: ec2:DescribeInstances
+                Resource: "*"
+              - Effect: Allow
+                Action: ec2:StopInstances
+                Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${BastionInstanceId}"
+
+  BastionIdleStopLogGroup:
+    Type: AWS::Logs::LogGroup
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: /aws/lambda/abc-prod-bastion-idle-stop
+      RetentionInDays: 30
+
+  BastionIdleStopFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: BastionIdleStopLogGroup
+    Properties:
+      FunctionName: abc-prod-bastion-idle-stop
+      Description: Stops abc-prod-bastion after IdleMinutes with NetworkIn below NetworkInIdleThresholdBytes. No auto-start -- start on demand only.
+      Runtime: python3.13
+      Architectures: [arm64]
+      Handler: index.lambda_handler
+      Role: !GetAtt BastionIdleStopRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          INSTANCE_ID: !Ref BastionInstanceId
+          IDLE_MINUTES: !Ref IdleMinutes
+          GRACE_MINUTES: !Ref GraceMinutes
+          NETWORK_IN_THRESHOLD_BYTES: !Ref NetworkInIdleThresholdBytes
+      Code:
+        ZipFile: |
+          import os, logging, boto3
+          from datetime import datetime, timedelta, timezone
+
+          log = logging.getLogger()
+          log.setLevel(logging.INFO)
+
+          INSTANCE_ID = os.environ["INSTANCE_ID"]
+          IDLE_MINUTES = int(os.environ.get("IDLE_MINUTES", "30"))
+          GRACE_MINUTES = int(os.environ.get("GRACE_MINUTES", "10"))
+          NETWORK_IN_THRESHOLD_BYTES = float(os.environ.get("NETWORK_IN_THRESHOLD_BYTES", "512000"))
+
+          ec2 = boto3.client("ec2")
+          cw = boto3.client("cloudwatch")
+
+          def network_in_sum(minutes):
+              end = datetime.now(timezone.utc)
+              start = end - timedelta(minutes=minutes)
+              resp = cw.get_metric_statistics(
+                  Namespace="AWS/EC2",
+                  MetricName="NetworkIn",
+                  Dimensions=[{"Name": "InstanceId", "Value": INSTANCE_ID}],
+                  StartTime=start,
+                  EndTime=end,
+                  Period=minutes * 60,
+                  Statistics=["Sum"],
+              )
+              points = resp.get("Datapoints", [])
+              return sum(p.get("Sum", 0) for p in points)
+
+          def lambda_handler(event, context):
+              reservations = ec2.describe_instances(InstanceIds=[INSTANCE_ID])["Reservations"]
+              instance = reservations[0]["Instances"][0]
+              state = instance["State"]["Name"]
+              launch_time = instance.get("LaunchTime")
+
+              if state != "running":
+                  log.info("Bastion %s is %s, nothing to do.", INSTANCE_ID, state)
+                  return {"ok": True, "action": "skip", "reason": f"state={state}"}
+
+              age_minutes = (datetime.now(timezone.utc) - launch_time).total_seconds() / 60
+              if age_minutes < GRACE_MINUTES:
+                  log.info("Bastion %s started %.1f min ago, inside grace period, skipping.", INSTANCE_ID, age_minutes)
+                  return {"ok": True, "action": "skip", "reason": "grace-period"}
+
+              net_in = network_in_sum(IDLE_MINUTES)
+              if net_in >= NETWORK_IN_THRESHOLD_BYTES:
+                  log.info("NetworkIn=%.0f bytes over last %d min (>= threshold %.0f), staying up.", net_in, IDLE_MINUTES, NETWORK_IN_THRESHOLD_BYTES)
+                  return {"ok": True, "action": "skip", "reason": "active", "network_in_bytes": net_in}
+
+              log.info("NetworkIn=%.0f bytes over last %d min (< threshold %.0f) -- stopping bastion %s.", net_in, IDLE_MINUTES, NETWORK_IN_THRESHOLD_BYTES, INSTANCE_ID)
+              ec2.stop_instances(InstanceIds=[INSTANCE_ID])
+              return {"ok": True, "action": "stopped", "network_in_bytes": net_in}
+      Tags:
+        - { Key: Name, Value: abc-prod-bastion-idle-stop }
+        - { Key: Department, Value: SHARED }
+        - { Key: Environment, Value: Prod }
+        - { Key: Owner, Value: IT }
+        - { Key: ManagedBy, Value: CloudFormation }
+        - { Key: Lifecycle, Value: active }
+
+  BastionIdleStopScheduleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: abc-prod-bastion-idle-stop-scheduler-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { "aws:SourceAccount": !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: invoke
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: [!GetAtt BastionIdleStopFunction.Arn, !Sub "${BastionIdleStopFunction.Arn}:*"]
+
+  BastionIdleStopSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: abc-prod-bastion-idle-stop-tick
+      Description: Every 5 minutes, checks whether abc-prod-bastion has been idle for IdleMinutes and stops it.
+      State: ENABLED
+      GroupName: default
+      ScheduleExpression: "rate(5 minutes)"
+      FlexibleTimeWindow: { Mode: "OFF" }
+      Target:
+        Arn: !GetAtt BastionIdleStopFunction.Arn
+        RoleArn: !GetAtt BastionIdleStopScheduleRole.Arn
+        RetryPolicy: { MaximumRetryAttempts: 0 }
+
+Outputs:
+  BastionIdleStopFunctionArn:
+    Value: !GetAtt BastionIdleStopFunction.Arn

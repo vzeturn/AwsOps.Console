@@ -1,0 +1,39 @@
+# Cloudflare Workers — static assets only (NO Worker script).
+#
+# There is deliberately no `main` key. With assets-only serving, Cloudflare serves files straight
+# from the edge and NO Worker invocation happens, so requests are not billable
+# (https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/ —
+# "Requests are only billable if a Worker script is invoked"). Adding a `main` script to do something
+# small (redirects, header tweaks, injecting config) would turn every page load into a billed
+# invocation; do the equivalent with `public/_headers` or at build time instead.
+#
+# WHAT THIS REPLACES: `infra/static-server/index.ts`, a Lambda whose entire job was to serve
+# frontend/dist — hand-rolled MIME mapping, `gzipSync` on every single request, cache-control rules,
+# and SPA fallback. All four are native here (brotli/gzip, ETag, and `not_found_handling`), and the
+# assets are served from the nearest Cloudflare location instead of one Lambda in ap-southeast-1.
+#
+# `config.js` (window.__APP_CONFIG__) is the one thing the Lambda did that a static host cannot: it
+# built the file per-request from environment variables. It is now generated at BUILD time by
+# `scripts/generate-config.mjs` into ./dist. See infra/deploy-frontend-cloudflare.sh.
+#
+# DEPLOY: do not run `wrangler deploy` by hand — `dist/config.js` must be generated first, with
+# API_BASE_URL read from the live CloudFormation outputs. Use:
+#   bash infra/deploy-frontend-cloudflare.sh
+
+name = "ops-dashboard"
+# Pinned explicitly. Without this, `wrangler deploy`/`deployments list` can fail to resolve the
+# account (observed: it tried a stale/unrelated account ID and returned "Authentication error
+# [code: 10000]") even when the logged-in token only has access to one account. Pin it to skip
+# account resolution entirely.
+account_id = "afcbab46bf04558dc1daa7a771bba97a"
+# Pinned deliberately. Bumping this can change runtime behavior; there is no reason to move it for an
+# assets-only Worker, so leave it unless a Cloudflare feature we actually need requires a newer date.
+compatibility_date = "2026-09-03"
+
+[assets]
+directory = "./dist/"
+# Serves /index.html with 200 for any path that is not a real file. Required because this is a
+# client-side-routed SPA: without it, refreshing on a deep link (or the Entra ID redirect landing back
+# on the app) would return a Cloudflare 404 instead of the app. This is the native equivalent of
+# `readIndexFallback()` in the old static-server Lambda.
+not_found_handling = "single-page-application"

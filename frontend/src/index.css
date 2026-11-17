@@ -1,0 +1,144 @@
+@import '@cloudscape-design/global-styles/index.css';
+
+/*
+ * Command palette (cmdk) — the one piece of chrome NOT built from Cloudscape components (there is
+ * no first-party Cloudscape command-palette pattern). Styled minimally with plain CSS variables
+ * that already track Cloudscape's own dark/light mode via `[data-awsui-color-scheme]` — see
+ * Cloudscape's dark-mode-utils docs.
+ */
+.command-palette-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 6000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: rgb(0 0 0 / 0.5);
+}
+
+.command-palette {
+  width: 100%;
+  max-width: 560px;
+  border-radius: 8px;
+  background: var(--awsui-color-background-container-content, #fff);
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.35);
+  overflow: hidden;
+}
+
+.command-palette-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px 16px;
+  font-size: 15px;
+  border: none;
+  border-bottom: 1px solid var(--awsui-color-border-divider-default, #e9ebed);
+  background: transparent;
+  color: inherit;
+  outline: none;
+}
+
+.command-palette-list {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.command-palette-empty {
+  padding: 16px;
+  font-size: 13px;
+  color: var(--awsui-color-text-body-secondary, #5f6b7a);
+}
+
+.command-palette-item {
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.command-palette-item[data-selected='true'] {
+  background: var(--awsui-color-background-item-selected, #e9f0fd);
+}
+
+/*
+ * Infra Map network diagram (components/InfraNetworkDiagram.tsx) — the resource chip's hover/
+ * focus polish needs real CSS (box-shadow + transform transitions aren't practical as React inline
+ * styles without extra hover-state bookkeeping). Uses the same `--awsui-color-*` custom properties
+ * as the rest of this file so it tracks dark/light mode automatically.
+ */
+/*
+ * Depth_Tier elevation scale (Requirement 2.1/2.2): `container-content` and `layout-main` were
+ * BOTH used here previously, on the assumption they'd render as visually distinct steps — verified
+ * (by reading the actual compiled hex values out of a `vite build` output) that they do NOT:
+ * both resolve to the exact same value in both themes (`#ffffff` light / `#161d26` dark), so the
+ * VPC and Subnet boxes were rendering with an IDENTICAL background all along, differing only by
+ * border width — exactly the failure mode Requirement 2.1 targets. Fixed with a real distinct
+ * token for Depth_Tier 1: `--awsui-color-background-visual-accent-grey` resolves to `#ebebf0`
+ * (light) / `#333843` (dark) — genuinely different from Depth_Tier 0's `#ffffff`/`#161d26` in both
+ * themes (see `diagramTheme.ts`'s own top-of-file comment for the full contrast verification).
+ */
+.infra-map-vpc-box {
+  background: var(--awsui-color-background-container-content, #ffffff);
+}
+
+.infra-map-subnet-box {
+  background: var(--awsui-color-background-visual-accent-grey, #ebebf0);
+}
+
+/*
+ * Depth_Tier 2 (Resource chip): no third Cloudscape semantic background token exists that is
+ * BOTH genuinely distinct from Depth_Tier 1's `visual-accent-grey` in both themes AND
+ * semantically appropriate to use for a resource node's background (checked the real compiled
+ * token list — the closest candidates are named for disabled controls/buttons, a misleading name
+ * to reuse here). Resource chips instead keep Depth_Tier 0's `container-content` background
+ * (set inline in `ResourceNode.tsx`/`AccountResourceGroupBox.tsx`) and are visually lifted OFF the
+ * Subnet's shaded background via a stronger baseline shadow than before (was `0 1px 2px`, a value
+ * too subtle to read as "elevated" rather than "has a 1px border" in a grayscale screenshot) —
+ * the shadow, not a third background step, is Depth_Tier 2's distinguishing signal.
+ */
+.infra-map-resource-chip {
+  transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+  box-shadow: 0 2px 5px rgb(0 0 0 / 0.16);
+}
+
+.infra-map-resource-chip[data-clickable='true']:hover {
+  box-shadow: 0 4px 10px rgb(0 0 0 / 0.18);
+  transform: translateY(-1px);
+  border-color: var(--awsui-color-text-interactive-default, #539fe5);
+}
+
+/*
+ * Interactive_Kpi (infra-map-redesign spec, Requirement 1.1) — the visible focus ring
+ * `KpiTile.tsx` needs when `onActivate` is passed. A plain inline `style` cannot express
+ * `:focus-visible` (keyboard-only focus, not the ring browsers show on every mouse click too),
+ * so this one small rule lives here instead — same theme-safe custom property convention as
+ * every other rule in this section.
+ */
+.infra-map-kpi-tile-interactive:focus-visible {
+  outline: 2px solid var(--awsui-color-text-interactive-default, #539fe5);
+  border-radius: 4px;
+}
+
+/*
+ * Interactive_Kpi scroll target highlight (Requirement 1.2) — a temporary pulse applied to the
+ * Diagram_Canvas section an Interactive_Kpi scrolls to, then removed after >=1.5s (the class is
+ * added/removed by `infra-map.tsx`'s own scroll+highlight helper, not by this CSS alone). Uses a
+ * `box-shadow` pulse (not `background`) so it does not fight with the element's own background
+ * (e.g. `AccountResourceGroupBox`'s `accentColor` border) and remains visible in both themes via
+ * the same interactive-text custom property used for the focus ring above.
+ */
+@keyframes infra-map-highlight-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--awsui-color-text-interactive-default, #539fe5);
+  }
+  50% {
+    box-shadow: 0 0 0 6px var(--awsui-color-text-interactive-default, #539fe5);
+  }
+}
+
+.infra-map-highlight-pulse {
+  animation: infra-map-highlight-pulse 0.5s ease-in-out 3;
+  border-radius: 10px;
+}

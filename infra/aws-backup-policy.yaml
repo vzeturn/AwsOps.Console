@@ -1,0 +1,81 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Tier-based AWS Backup policy (ISO 27001 A.8.13). One plan per BackupTier, each selecting EC2 instances AND
+  RDS instances by tag - a new resource is covered the moment it carries BackupTier, no plan edit needed.
+
+Parameters:
+  VaultName:
+    Type: String
+    Default: ACME_Vault
+    Description: Existing vault (KMS-encrypted); holds all historical recovery points.
+  BackupRoleArn:
+    Type: String
+    Default: arn:aws:iam::123456789012:role/service-role/AWSBackupDefaultServiceRole
+
+Resources:
+  # Critical: 10-year retention of yearly points (ISO 27001 evidence / legal hold horizon).
+  CriticalPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: abc-prod-backup-plan-critical
+        BackupPlanRule:
+          - { RuleName: daily,   TargetBackupVault: !Ref VaultName, ScheduleExpression: 'cron(30 22 ? * * *)',  ScheduleExpressionTimezone: Asia/Bangkok, StartWindowMinutes: 120, CompletionWindowMinutes: 10080, Lifecycle: { DeleteAfterDays: 7 } }
+          - { RuleName: weekly,  TargetBackupVault: !Ref VaultName, ScheduleExpression: 'cron(0 23 ? * SUN *)', ScheduleExpressionTimezone: Asia/Bangkok, StartWindowMinutes: 120, CompletionWindowMinutes: 10080, Lifecycle: { DeleteAfterDays: 28 } }
+          - { RuleName: monthly, TargetBackupVault: !Ref VaultName, ScheduleExpression: 'cron(30 23 L * ? *)',  ScheduleExpressionTimezone: Asia/Bangkok, StartWindowMinutes: 120, CompletionWindowMinutes: 10080, Lifecycle: { DeleteAfterDays: 365 } }
+          - { RuleName: yearly,  TargetBackupVault: !Ref VaultName, ScheduleExpression: 'cron(0 0 1 1 ? *)',    ScheduleExpressionTimezone: Asia/Bangkok, StartWindowMinutes: 120, CompletionWindowMinutes: 10080, Lifecycle: { DeleteAfterDays: 3650 } }
+
+  StandardPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: abc-prod-backup-plan-standard
+        BackupPlanRule:
+          - { RuleName: daily,   TargetBackupVault: !Ref VaultName, ScheduleExpression: 'cron(0 1 ? * * *)',    ScheduleExpressionTimezone: Asia/Bangkok, StartWindowMinutes: 120, CompletionWindowMinutes: 10080, Lifecycle: { DeleteAfterDays: 7 } }
+          - { RuleName: weekly,  TargetBackupVault: !Ref VaultName, ScheduleExpression: 'cron(30 1 ? * SUN *)', ScheduleExpressionTimezone: Asia/Bangkok, StartWindowMinutes: 120, CompletionWindowMinutes: 10080, Lifecycle: { DeleteAfterDays: 28 } }
+          - { RuleName: monthly, TargetBackupVault: !Ref VaultName, ScheduleExpression: 'cron(0 2 L * ? *)',    ScheduleExpressionTimezone: Asia/Bangkok, StartWindowMinutes: 120, CompletionWindowMinutes: 10080, Lifecycle: { DeleteAfterDays: 365 } }
+
+  MinimalPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: abc-prod-backup-plan-minimal
+        BackupPlanRule:
+          - { RuleName: daily,   TargetBackupVault: !Ref VaultName, ScheduleExpression: 'cron(30 3 ? * * *)',   ScheduleExpressionTimezone: Asia/Bangkok, StartWindowMinutes: 120, CompletionWindowMinutes: 10080, Lifecycle: { DeleteAfterDays: 14 } }
+
+  # ListOfTags entries are OR'ed: the fleet carries both 'Critical' and 'critical' spellings.
+  CriticalSelection:
+    Type: AWS::Backup::BackupSelection
+    Properties:
+      BackupPlanId: !Ref CriticalPlan
+      BackupSelection:
+        SelectionName: abc-prod-backup-sel-critical
+        IamRoleArn: !Ref BackupRoleArn
+        Resources: ['arn:aws:ec2:*:*:instance/*', 'arn:aws:rds:*:*:db:*']
+        ListOfTags:
+          - { ConditionType: STRINGEQUALS, ConditionKey: BackupTier, ConditionValue: Critical }
+          - { ConditionType: STRINGEQUALS, ConditionKey: BackupTier, ConditionValue: critical }
+
+  StandardSelection:
+    Type: AWS::Backup::BackupSelection
+    Properties:
+      BackupPlanId: !Ref StandardPlan
+      BackupSelection:
+        SelectionName: abc-prod-backup-sel-standard
+        IamRoleArn: !Ref BackupRoleArn
+        Resources: ['arn:aws:ec2:*:*:instance/*', 'arn:aws:rds:*:*:db:*']
+        ListOfTags:
+          - { ConditionType: STRINGEQUALS, ConditionKey: BackupTier, ConditionValue: Standard }
+          - { ConditionType: STRINGEQUALS, ConditionKey: BackupTier, ConditionValue: standard }
+
+  MinimalSelection:
+    Type: AWS::Backup::BackupSelection
+    Properties:
+      BackupPlanId: !Ref MinimalPlan
+      BackupSelection:
+        SelectionName: abc-prod-backup-sel-minimal
+        IamRoleArn: !Ref BackupRoleArn
+        Resources: ['arn:aws:ec2:*:*:instance/*', 'arn:aws:rds:*:*:db:*']
+        ListOfTags:
+          - { ConditionType: STRINGEQUALS, ConditionKey: BackupTier, ConditionValue: Minimal }
+          - { ConditionType: STRINGEQUALS, ConditionKey: BackupTier, ConditionValue: minimal }

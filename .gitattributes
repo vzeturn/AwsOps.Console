@@ -1,0 +1,22 @@
+# Normalize line endings to LF for every text file, regardless of each contributor's local
+# `core.autocrlf` setting. Without this, a machine with `core.autocrlf=true` (git's own suggested
+# Windows default) checks every file out with CRLF, and a handful of build/test tools in this repo
+# parse source with a strict ESM/JS parser (Vite 8's oxc-based transform pipeline) that can
+# mis-tokenize a CRLF-terminated block comment right before an `import` statement — this caused a
+# real, reproducible `SyntaxError: Invalid or unexpected token` in
+# `frontend/scripts/generate-config.test.mjs` on a clean checkout, traced back to exactly this.
+* text=auto eol=lf
+
+# Binary assets: never touch line endings, would corrupt them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+
+# Windows-only scripts genuinely need CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
