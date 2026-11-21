@@ -22,7 +22,7 @@
  * - `computeUptimeMinutes` — imported by `modules/alerting/alarm-baseline-manager.ts` and
  *   `modules/governance/patchScheduling.ts`.
  * - `fetchEc2NameTag`/`fetchNatGatewayNameTag`/`resolveEc2DisplayName` — imported by
- *   `modules/alerting/discord-alarm-notifier.ts`/`health-report.ts`.
+ *   `modules/alerting/alarm-notifier.ts`/`health-report.ts`.
  * - `assertInstanceInInfraCache`/`EC2_INSTANCE_ID_PATTERN` — imported by
  *   `modules/security/actions-security-group.ts` and used internally by this module's own
  *   run-command handlers/services.

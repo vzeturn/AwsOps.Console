@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const rdsSendMock = vi.fn();
 const ec2SendMock = vi.fn();
-const postDiscordEmbedsMock = vi.fn();
+const postAlertEmbedsMock = vi.fn();
 const waitUntilInstanceStoppedMock = vi.fn();
 
 vi.mock('@aws-sdk/client-rds', () => ({
@@ -19,8 +19,8 @@ vi.mock('@aws-sdk/client-ec2', () => ({
   waitUntilInstanceStopped: (...args: unknown[]) => waitUntilInstanceStoppedMock(...args),
 }));
 
-vi.mock('../alerting/discordWebhook.js', () => ({
-  postDiscordEmbeds: postDiscordEmbedsMock,
+vi.mock('../alerting/alertHook.js', () => ({
+  postAlertEmbeds: postAlertEmbedsMock,
 }));
 
 const { handler } = await import('./downsize-scheduler.js');
@@ -28,9 +28,9 @@ const { handler } = await import('./downsize-scheduler.js');
 beforeEach(() => {
   rdsSendMock.mockReset();
   ec2SendMock.mockReset();
-  postDiscordEmbedsMock.mockReset();
+  postAlertEmbedsMock.mockReset();
   waitUntilInstanceStoppedMock.mockReset();
-  postDiscordEmbedsMock.mockResolvedValue(undefined);
+  postAlertEmbedsMock.mockResolvedValue(undefined);
   waitUntilInstanceStoppedMock.mockResolvedValue(undefined);
 });
 
@@ -47,8 +47,8 @@ describe('downsize-scheduler handler — RDS', () => {
     const result = await handler({ rds: { instanceIdentifier: 'abc-prod-rds-postgres', targetClass: 'db.m7g.large' } });
 
     expect(result.rdsOutcome).toBe('success');
-    expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     const rollback = findField(embed, 'Rollback');
     expect(rollback.value).toContain('db.m7g.xlarge');
     expect(rollback.value).toContain('abc-prod-rds-postgres');
@@ -60,7 +60,7 @@ describe('downsize-scheduler handler — RDS', () => {
     const result = await handler({ rds: { instanceIdentifier: 'abc-prod-rds-postgres', targetClass: 'db.m7g.large' } });
 
     expect(result.rdsOutcome).toBe('success');
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     expect(embed.fields.find((f: { name: string }) => f.name === 'Rollback')).toBeUndefined();
   });
 
@@ -70,7 +70,7 @@ describe('downsize-scheduler handler — RDS', () => {
     const result = await handler({ rds: { instanceIdentifier: 'abc-prod-rds-postgres', targetClass: 'db.m7g.large' } });
 
     expect(result.rdsOutcome).toBe('failure');
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     expect(embed.fields.find((f: { name: string }) => f.name === 'Rollback')).toBeUndefined();
   });
 
@@ -83,7 +83,7 @@ describe('downsize-scheduler handler — RDS', () => {
     const sentInput = rdsSendMock.mock.calls[0][0].input;
     expect(sentInput).toMatchObject({ DBInstanceIdentifier: 'abc-prod-rds-postgres', AvailabilityZone: 'ap-southeast-1a' });
     expect(sentInput.DBInstanceClass).toBeUndefined();
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     const rollback = findField(embed, 'Rollback');
     expect(rollback.value).toContain('ap-southeast-1b');
     expect(rollback.value).not.toContain('class back to');
@@ -104,7 +104,7 @@ describe('downsize-scheduler handler — EC2', () => {
     const result = await handler({ ec2: { instanceId: 'i-abc', targetType: 'm5.large' } });
 
     expect(result.ec2Outcome).toBe('success');
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     const rollback = findField(embed, 'Rollback');
     expect(rollback.value).toContain('m5.xlarge');
     expect(rollback.value).toContain('abc-prod-ec2-webapp');
@@ -124,7 +124,7 @@ describe('downsize-scheduler handler — EC2', () => {
 
     await handler({ ec2: { instanceId: 'i-abc', targetType: 'm5.large' } });
 
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     const rollback = findField(embed, 'Rollback');
     expect(rollback.value).toContain('ModifyInstanceAttribute');
     expect(rollback.value).not.toContain('stop, ModifyInstanceAttribute');
@@ -144,13 +144,13 @@ describe('downsize-scheduler handler — EC2', () => {
     const result = await handler({ ec2: { instanceId: 'i-abc', targetType: 'm5.large' } });
 
     expect(result.ec2Outcome).toBe('failure');
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     expect(embed.fields.find((f: { name: string }) => f.name === 'Rollback')).toBeUndefined();
   });
 });
 
 describe('downsize-scheduler handler — combined', () => {
-  it('both rds and ec2 provided -> sends both embeds in one postDiscordEmbeds call, skipped is never used', async () => {
+  it('both rds and ec2 provided -> sends both embeds in one postAlertEmbeds call, skipped is never used', async () => {
     rdsSendMock.mockResolvedValue({ DBInstance: { DBInstanceClass: 'db.m7g.xlarge' } });
     ec2SendMock.mockImplementation((command: { __cmd: string }) => {
       if (command.__cmd === 'DescribeInstances') {
@@ -165,13 +165,13 @@ describe('downsize-scheduler handler — combined', () => {
     });
 
     expect(result).toEqual({ ok: true, rdsOutcome: 'success', ec2Outcome: 'success' });
-    expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
-    expect(postDiscordEmbedsMock.mock.calls[0][0]).toHaveLength(2);
+    expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
+    expect(postAlertEmbedsMock.mock.calls[0][0]).toHaveLength(2);
   });
 
-  it('neither rds nor ec2 provided -> does not call postDiscordEmbeds, returns skipped/skipped', async () => {
+  it('neither rds nor ec2 provided -> does not call postAlertEmbeds, returns skipped/skipped', async () => {
     const result = await handler({});
     expect(result).toEqual({ ok: true, rdsOutcome: 'skipped', ec2Outcome: 'skipped' });
-    expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+    expect(postAlertEmbedsMock).not.toHaveBeenCalled();
   });
 });

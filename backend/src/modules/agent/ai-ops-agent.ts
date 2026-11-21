@@ -13,7 +13,7 @@ import { isAgentAutoExecutable } from './agentAutoExecutionPolicy.js';
 import { isAgentAutoExecuteEnabled } from './agentKillSwitch.js';
 import { reserveAgentExecutionBudget } from './agentRateLimiter.js';
 import { decideAgentActions, type AgentDecisionCandidate } from './agentClaudeDecision.js';
-import { postDiscordEmbeds, type DiscordEmbed, buildOpsNotificationEmbed, type OpsNotificationSeverity } from '../alerting/index.js';
+import { postAlertEmbeds, type AlertEmbed, buildOpsNotificationEmbed, type OpsNotificationSeverity } from '../alerting/index.js';
 import { logger } from '../../shared-kernel/logger.js';
 
 /**
@@ -193,14 +193,14 @@ interface ExecutedEntry {
 }
 
 /**
- * One consolidated Discord notification per run (never one per action — a run that auto-executes 3
+ * One consolidated alert per run (never one per action — a run that auto-executes 3
  * things should not flood the channel with 3 separate messages). Severity is `success` only when
  * EVERY executed action succeeded; a single failure/rejection downgrades the whole notification to
  * `warning` so it isn't mistaken for a fully clean run. Each action's own outcome/reason and the
  * model's one-sentence rationale are both shown, since "what happened" and "why the agent thought
  * it was worth doing" are both operationally relevant to a human reviewing this after the fact.
  */
-function buildAgentRunEmbed(executed: readonly ExecutedEntry[]): DiscordEmbed {
+function buildAgentRunEmbed(executed: readonly ExecutedEntry[]): AlertEmbed {
   const succeeded = executed.filter((e) => e.result.outcome === 'success');
   const failedCount = executed.length - succeeded.length;
   const severity: OpsNotificationSeverity = failedCount === 0 ? 'success' : 'warning';
@@ -303,7 +303,7 @@ export async function handler(): Promise<AiOpsAgentResult> {
   );
 
   if (executed.length > 0) {
-    await postDiscordEmbeds([buildAgentRunEmbed(executed)]);
+    await postAlertEmbeds([buildAgentRunEmbed(executed)]);
   }
 
   return {

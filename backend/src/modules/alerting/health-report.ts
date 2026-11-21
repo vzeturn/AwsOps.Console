@@ -2,7 +2,7 @@ import { getEc2Client } from '../../core/aws-clients.js';
 import type { AlarmSummary } from '@ops-dashboard/shared';
 import { getRunbookForMetric } from '@ops-dashboard/shared';
 import { getAlerts } from './alert-service.js';
-import { postDiscordEmbeds, type DiscordEmbed, type DiscordEmbedField } from './discordWebhook.js';
+import { postAlertEmbeds, type AlertEmbed, type AlertEmbedField } from './alertHook.js';
 import { buildOpsNotificationEmbed, type OpsNotificationSeverity } from './opsNotification.js';
 // Lean_Lambda_Exception (Requirement 6.4a): direct import, not `../ec2-management/index.js` —
 // see the exception comment in `alarm-baseline-manager.ts` (same module, same reason):
@@ -13,11 +13,11 @@ import { logger } from '../../shared-kernel/logger.js';
 
 /**
  * `health-report.ts` — a NEW Lambda, scheduled (EventBridge Scheduler `rate(15 minutes)`, see
- * `infra/ops-dashboard.yaml`) — sends a Discord Embed SUMMARIZING the status of the whole system
+ * `infra/ops-dashboard.yaml`) — sends an alert embed SUMMARIZING the status of the whole system
  * every 15 minutes, REGARDLESS of whether there's a problem (requirement: "every 15 minutes send
  * a report summarizing whether the system is having any issues").
  *
- * This is a channel INDEPENDENT of `discord-alarm-notifier.ts` (the SNS state-change subscriber)
+ * This is a channel INDEPENDENT of `alarm-notifier.ts` (the SNS state-change subscriber)
  * — if the SNS notifier fails/misses a message (the exact bug fixed in a previous commit —
  * "problem detected" didn't show but "resolved" still did), this periodic report still catches
  * it on its own because it RE-READS the current `CloudWatch_Alarm` state via `getAlerts()`
@@ -28,7 +28,7 @@ import { logger } from '../../shared-kernel/logger.js';
  * EC2/RDS/ALB/ECS resources) — re-running that heavy pipeline every 15 minutes (96 times/day)
  * would significantly multiply CloudWatch API cost, while "problem" here only needs one signal
  * that already exists: alarm state (the same definition of "has a problem" already used by
- * `discord-alarm-notifier.ts`/`alarm-baseline-manager.ts`).
+ * `alarm-notifier.ts`/`alarm-baseline-manager.ts`).
  */
 
 const MAX_LISTED_ALARMS = 15;
@@ -48,7 +48,7 @@ function severityFor(hasCritical: boolean, hasWarn: boolean): OpsNotificationSev
 
 /** Formats one alarm listing line — prioritizes showing the related resource (easier to
  * recognize) instead of just the technical alarm name, following the same principle already
- * applied in `discord-alarm-notifier.ts`. `resourceNames` maps an EC2 InstanceId to its resolved
+ * applied in `alarm-notifier.ts`. `resourceNames` maps an EC2 InstanceId to its resolved
  * Name tag (see `handler()`'s pre-fetch below) — an id absent from the map (a lookup failure, or
  * a resourceId that was never an EC2 instance to begin with) falls back to the raw id, same
  * fallback contract every other notification composer in this project uses.
@@ -76,9 +76,9 @@ function formatAlarmLine(alarm: AlarmSummary, resourceNames: ReadonlyMap<string,
 }
 
 /** Builds the field listing non-OK alarms, truncated if it exceeds `MAX_LISTED_ALARMS` (to avoid
- * exceeding the Discord Embed API's 1024-character/field limit when there are many alarms) —
+ * exceeding the alert embed API's 1024-character/field limit when there are many alarms) —
  * still states clearly how many more alarms aren't listed, never silently drops information. */
-function buildProblemField(problemAlarms: AlarmSummary[], resourceNames: ReadonlyMap<string, string>): DiscordEmbedField {
+function buildProblemField(problemAlarms: AlarmSummary[], resourceNames: ReadonlyMap<string, string>): AlertEmbedField {
   const shown = problemAlarms.slice(0, MAX_LISTED_ALARMS);
   const lines = shown.map((alarm) => formatAlarmLine(alarm, resourceNames));
   const remaining = problemAlarms.length - shown.length;
@@ -87,17 +87,17 @@ function buildProblemField(problemAlarms: AlarmSummary[], resourceNames: Readonl
 }
 
 /**
- * Pure function — kept separate so tests don't need to mock `getAlerts()`/`postDiscordEmbeds()`.
+ * Pure function — kept separate so tests don't need to mock `getAlerts()`/`postAlertEmbeds()`.
  * `resourceNames` (EC2 InstanceId -> Name tag) defaults to empty so existing/simple callers don't
  * need to pass one — `handler()` below is the one caller that actually resolves names before
  * calling this.
  */
-export function buildHealthReportEmbed(alerts: AlarmSummary[], resourceNames: ReadonlyMap<string, string> = new Map()): DiscordEmbed {
+export function buildHealthReportEmbed(alerts: AlarmSummary[], resourceNames: ReadonlyMap<string, string> = new Map()): AlertEmbed {
   const problemAlarms = alerts.filter((a) => a.threshold.level !== 'ok');
   const hasCritical = problemAlarms.some((a) => a.state === 'ALARM');
   const hasWarn = problemAlarms.some((a) => a.state === 'INSUFFICIENT_DATA');
 
-  const extra: DiscordEmbedField[] = [{ name: 'Total alarms', value: String(alerts.length), inline: true }];
+  const extra: AlertEmbedField[] = [{ name: 'Total alarms', value: String(alerts.length), inline: true }];
   if (problemAlarms.length > 0) {
     extra.push(buildProblemField(problemAlarms, resourceNames));
   }
@@ -134,7 +134,7 @@ export function buildHealthReportEmbed(alerts: AlarmSummary[], resourceNames: Re
 /**
  * Resolves every EC2 InstanceId among `alerts`' `relatedResourceId` to its Name tag — requirement:
  * "should only use resource names, not ids, since they're hard to read", applied consistently
- * with `discord-alarm-notifier.ts` (the same InstanceId shows the SAME name in both channels).
+ * with `alarm-notifier.ts` (the same InstanceId shows the SAME name in both channels).
  * Looked up only ONCE per unique instance id (not once per alarm — several alarms commonly share
  * one instance, e.g. CPU + StatusCheckFailed), and only for alarms that actually need attention
  * (an `ok` alarm's resource name is never shown, no need to spend a DescribeInstances call on it).
@@ -162,7 +162,10 @@ export async function handler(): Promise<{ ok: true; problemCount: number }> {
   const alerts = await getAlerts();
   const resourceNames = await resolveEc2ResourceNames(alerts);
   const embed = buildHealthReportEmbed(alerts, resourceNames);
-  await postDiscordEmbeds([embed]);
+  // Log-only (RT-0490): every ALARM transition already opens its own hub incident through
+  // alarm-notifier, and a hub incident stays open until settled. Posting this 15-minute summary
+  // would open a duplicate incident on every run while a problem persists.
+  await postAlertEmbeds([embed], { logOnly: true });
 
   const problemCount = alerts.filter((a) => a.threshold.level !== 'ok').length;
   logger.info(`health-report: periodic report sent — ${problemCount}/${alerts.length} alarms need attention.`);

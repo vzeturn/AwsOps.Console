@@ -16,7 +16,7 @@ const repoRoot = path.join(infraRoot, '..');
  *   router -> web-router-fn                        static-server -> web-static-fn
  *   cost-collector -> collector-cost-fn             infra-collector -> collector-infra-fn
  *   infra-review-collector -> collector-compliance-fn
- *   discord-alarm-notifier -> alerting-notifier-fn  alarm-baseline-manager -> alerting-baseline-manager-fn
+ *   alarm-notifier -> alerting-notifier-fn  alarm-baseline-manager -> alerting-baseline-manager-fn
  *   health-report -> alerting-health-report-fn
  *   patch-scheduler -> governance-patch-scheduler-fn
  *   ec2-rightsize-applier -> governance-rightsize-applier-fn
@@ -30,7 +30,7 @@ const repoRoot = path.join(infraRoot, '..');
  *   idle-scheduler-mutate -> idle-scheduler-mutate-fn
  *
  * Folders: router/, static-server/, cost-collector/, infra-review-collector/, infra-collector/,
- * action-execution/, discord-alarm-notifier/, alarm-baseline-manager/, health-report/,
+ * action-execution/, alarm-notifier/, alarm-baseline-manager/, health-report/,
  * patch-scheduler/, ec2-rightsize-applier/, downsize-scheduler/, scheduled-actions-mutate/,
  * approval-mutate/, time-of-day-trigger/, ai-ops-agent/, the 5 automation Lambdas:
  * alerting-topic-guardian/, security-guardduty-triage/, security-public-bucket-guardian/,
@@ -69,13 +69,13 @@ await bundle(path.join(repoRoot, 'backend/src/infra-collector.ts'), path.join(bu
 // action-execution-fn
 await bundle(path.join(repoRoot, 'backend/src/modules/actions/action-execution-handler.ts'), path.join(buildDir, 'action-execution/index.mjs'));
 
-// discord-alarm-notifier (the only subscriber of the CloudWatch Alarm SNS topic)
-await bundle(path.join(repoRoot, 'backend/src/modules/alerting/discord-alarm-notifier.ts'), path.join(buildDir, 'discord-alarm-notifier/index.mjs'));
+// alarm-notifier (the only subscriber of the CloudWatch Alarm SNS topic)
+await bundle(path.join(repoRoot, 'backend/src/modules/alerting/alarm-notifier.ts'), path.join(buildDir, 'alarm-notifier/index.mjs'));
 
 // alarm-baseline-manager (standard alarm set per resource type, runs on a schedule)
 await bundle(path.join(repoRoot, 'backend/src/modules/alerting/alarm-baseline-manager.ts'), path.join(buildDir, 'alarm-baseline-manager/index.mjs'));
 
-// health-report (posts a Discord embed summarizing system health every 15 minutes, re-reading DescribeAlarms independently of the SNS path)
+// health-report (posts an alert embed summarizing system health every 15 minutes, re-reading DescribeAlarms independently of the SNS path)
 await bundle(path.join(repoRoot, 'backend/src/modules/alerting/health-report.ts'), path.join(buildDir, 'health-report/index.mjs'));
 
 // patch-scheduler (patches instances carrying the on/off schedule tag >= 30 minutes after start, runs on a short schedule)
@@ -143,7 +143,7 @@ cpSync(frontendDist, path.join(buildDir, 'static-server/site'), { recursive: tru
 
 console.log(
   'Packaged artifacts into infra/build/{router,cost-collector,infra-review-collector,infra-collector,' +
-    'action-execution,discord-alarm-notifier,alarm-baseline-manager,health-report,patch-scheduler,' +
+    'action-execution,alarm-notifier,alarm-baseline-manager,health-report,patch-scheduler,' +
     'ec2-rightsize-applier,downsize-scheduler,time-of-day-trigger,ai-ops-agent,scheduled-actions-mutate,' +
     'approval-mutate,alerting-topic-guardian,security-guardduty-triage,security-public-bucket-guardian,' +
     'governance-exemption-auditor,security-endpoint-drift-detector,idle-scheduler-tick,idle-scheduler-wake,' +

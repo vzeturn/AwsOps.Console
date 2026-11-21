@@ -18,7 +18,7 @@ import type { RecommendationFindingType } from './index.js';
  * Referenced by both `RecommendationFindingType` (Assessment findings) and by a small set of
  * well-known CloudWatch metric names (Monitoring alarms/metric panels) — see `RUNBOOK_BY_METRIC`
  * below. Kept in `shared` (not `backend`-only) so the frontend can render the SAME text the
- * backend would use if it ever needs to (e.g. embedding a runbook excerpt in a Discord alert),
+ * backend would use if it ever needs to (e.g. embedding a runbook excerpt in a hub alert),
  * with no risk of the two copies drifting apart.
  */
 
@@ -542,11 +542,11 @@ export const RUNBOOK_BY_METRIC: Record<string, RunbookEntry> = {
   // this project's own `alarm-baseline-manager.ts` does NOT create or manage — they were
   // provisioned out-of-band (a standard CIS Benchmark CloudTrail metric-filter alarm pack) and
   // point at a DIFFERENT SNS topic (`abc-prod-security-alerts`) than `AlarmNotificationTopic`.
-  // Someone later subscribed `discord-alarm-notifier-fn` to that topic too, so these alarms flow
+  // Someone later subscribed `alerting-notifier-fn` to that topic too, so these alarms flow
   // through the SAME notifier/runbook pipeline as everything else in this catalog — but until
   // this entry existed, `getRunbookForMetric()` returned `undefined` for all 12, which is
   // EXACTLY why they always rendered as SEV-2 with the generic "no dedicated runbook exists yet"
-  // impact text (see `discord-alarm-notifier.ts`'s `alarmSevTier`: SEV-1 requires a resolvable
+  // impact text (see `alarm-notifier.ts`'s `alarmSevTier`: SEV-1 requires a resolvable
   // runbook). Adding these entries is what upgrades a genuine CIS breach to SEV-1.
   //
   // WHY THESE ALARMS ARE STRUCTURALLY VAGUE, AND WHAT THIS RUNBOOK CANNOT FIX ON ITS OWN. Every
@@ -557,7 +557,7 @@ export const RUNBOOK_BY_METRIC: Record<string, RunbookEntry> = {
   // filter pattern matches many different callers/IPs/resources over time). The account/IAM
   // principal/source IP/exact API call/resource ARN a reader actually needs can ONLY come from
   // re-querying the underlying CloudTrail event for the alarm's own evaluation window — see
-  // `lookupCisBenchmarkEvent` in `discord-alarm-notifier.ts`, which this runbook's `diagnosis`
+  // `lookupCisBenchmarkEvent` in `alarm-notifier.ts`, which this runbook's `diagnosis`
   // step below assumes will have already run and attached that detail to the Impact/Metadata
   // fields BEFORE a human ever needs to open the console.
   CloudTrailConfigChangesCount: {

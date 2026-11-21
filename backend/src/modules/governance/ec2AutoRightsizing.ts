@@ -221,7 +221,7 @@ function isWithinCooldown(lastAutoRightsizeDate: string | undefined, now: Date):
 
 export interface AutoRightsizeCandidateInput extends AutoRightsizeTagState {
   instanceId: string;
-  /** The instance's Name tag — used for display in the Discord Embed instead of the raw InstanceId
+  /** The instance's Name tag — used for display in the alert embed instead of the raw InstanceId
    * (requirement: "should only use instance/resource names, not IDs, since they're hard to read"). */
   name: string;
 }

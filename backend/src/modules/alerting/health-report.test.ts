@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AlarmSummary } from '@ops-dashboard/shared';
 
 process.env.AWS_REGION = 'ap-southeast-1';
-process.env.DISCORD_WEBHOOK_URL_PARAM_NAME = '/abc/ops-dashboard/prod/discord-webhook-url';
+process.env.ALERT_HOOK_URL_PARAM_NAME = '/abc/ops-dashboard/prod/alert-hook-url';
 
 const getAlertsMock = vi.fn();
 vi.mock('./alert-service.js', () => ({ getAlerts: () => getAlertsMock() }));
 
-const postDiscordEmbedsMock = vi.fn();
-vi.mock('./discordWebhook.js', () => ({ postDiscordEmbeds: (embeds: unknown) => postDiscordEmbedsMock(embeds) }));
+const postAlertEmbedsMock = vi.fn();
+vi.mock('./alertHook.js', () => ({ postAlertEmbeds: (embeds: unknown, options?: unknown) => postAlertEmbedsMock(embeds, options) }));
 
 const ec2SendMock = vi.fn();
 vi.mock('@aws-sdk/client-ec2', () => ({
@@ -32,7 +32,7 @@ function makeAlarm(overrides: Partial<AlarmSummary> = {}): AlarmSummary {
 
 beforeEach(() => {
   getAlertsMock.mockReset();
-  postDiscordEmbedsMock.mockReset();
+  postAlertEmbedsMock.mockReset();
   ec2SendMock.mockReset();
   ec2SendMock.mockResolvedValue({ Reservations: [] });
 });
@@ -199,18 +199,19 @@ describe('buildHealthReportEmbed — Impact and Links', () => {
 });
 
 describe('handler', () => {
-  it('calls getAlerts() then postDiscordEmbeds() with exactly 1 embed, returns the correct problemCount', async () => {
+  it('calls getAlerts() then postAlertEmbeds() with exactly 1 embed, returns the correct problemCount', async () => {
     getAlertsMock.mockResolvedValue([
       makeAlarm(),
       makeAlarm({ alarmName: 'a2', state: 'ALARM', threshold: { level: 'critical', reason: 'ALARM' } }),
     ]);
-    postDiscordEmbedsMock.mockResolvedValue(undefined);
+    postAlertEmbedsMock.mockResolvedValue(undefined);
 
     const result = await handler();
 
     expect(result).toEqual({ ok: true, problemCount: 1 });
-    expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
-    expect(postDiscordEmbedsMock.mock.calls[0][0]).toHaveLength(1);
+    expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
+    expect(postAlertEmbedsMock.mock.calls[0][0]).toHaveLength(1);
+    expect(postAlertEmbedsMock.mock.calls[0][1]).toEqual({ logOnly: true });
   });
 
   it('resolves the EC2 Name tag for a problem alarm and shows it instead of the raw InstanceId', async () => {
@@ -225,12 +226,12 @@ describe('handler', () => {
     ec2SendMock.mockResolvedValue({
       Reservations: [{ Instances: [{ Tags: [{ Key: 'Name', Value: 'abc-prod-ec2-gateway' }] }] }],
     });
-    postDiscordEmbedsMock.mockResolvedValue(undefined);
+    postAlertEmbedsMock.mockResolvedValue(undefined);
 
     await handler();
 
     expect(ec2SendMock).toHaveBeenCalledTimes(1);
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     const field = embed.fields.find((f: { name: string }) => f.name.startsWith('Alarms needing attention'));
     expect(field.value).toContain('abc-prod-ec2-gateway');
     expect(field.value).not.toContain('i-0a1b2c3d4e5f60001');
@@ -245,7 +246,7 @@ describe('handler', () => {
         relatedResourceId: 'abc-prod-rds-postgres',
       }),
     ]);
-    postDiscordEmbedsMock.mockResolvedValue(undefined);
+    postAlertEmbedsMock.mockResolvedValue(undefined);
 
     await handler();
 
@@ -258,7 +259,7 @@ describe('handler', () => {
       makeAlarm({ alarmName: 'ec2-status-check-failed', state: 'ALARM', threshold: { level: 'critical', reason: 'ALARM' }, relatedResourceId: 'i-0a1b2c3d4e5f60001' }),
     ]);
     ec2SendMock.mockResolvedValue({ Reservations: [{ Instances: [{ Tags: [{ Key: 'Name', Value: 'abc-prod-ec2-gateway' }] }] }] });
-    postDiscordEmbedsMock.mockResolvedValue(undefined);
+    postAlertEmbedsMock.mockResolvedValue(undefined);
 
     await handler();
 
@@ -270,10 +271,10 @@ describe('handler', () => {
       makeAlarm({ alarmName: 'ec2-cpu-high', state: 'ALARM', threshold: { level: 'critical', reason: 'ALARM' }, relatedResourceId: 'i-0a1b2c3d4e5f60001' }),
     ]);
     ec2SendMock.mockRejectedValue(new Error('AccessDenied'));
-    postDiscordEmbedsMock.mockResolvedValue(undefined);
+    postAlertEmbedsMock.mockResolvedValue(undefined);
 
     await expect(handler()).resolves.toEqual({ ok: true, problemCount: 1 });
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     const field = embed.fields.find((f: { name: string }) => f.name.startsWith('Alarms needing attention'));
     expect(field.value).toContain('i-0a1b2c3d4e5f60001');
   });

@@ -11,14 +11,14 @@ vi.mock('@aws-sdk/client-s3', () => ({
   GetBucketTaggingCommand: vi.fn().mockImplementation((input: unknown) => ({ __cmd: 'GetBucketTagging', input })),
 }));
 
-const postDiscordEmbedsMock = vi.fn();
-vi.mock('../alerting/discordWebhook.js', () => ({ postDiscordEmbeds: postDiscordEmbedsMock }));
+const postAlertEmbedsMock = vi.fn();
+vi.mock('../alerting/alertHook.js', () => ({ postAlertEmbeds: postAlertEmbedsMock }));
 
 const { handler, findUnexplainedPublicBuckets } = await import('./security-public-bucket-guardian.js');
 
 beforeEach(() => {
   s3SendMock.mockReset();
-  postDiscordEmbedsMock.mockReset();
+  postAlertEmbedsMock.mockReset();
 });
 
 describe('findUnexplainedPublicBuckets', () => {
@@ -52,7 +52,7 @@ describe('handler', () => {
     const result = await handler();
 
     expect(result).toEqual({ ok: true, checked: 3, unexplainedPublic: 0 });
-    expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+    expect(postAlertEmbedsMock).not.toHaveBeenCalled();
   });
 
   it('flags a bucket that is public but has NO DataClass tag at all (NoSuchTagSet)', async () => {
@@ -70,8 +70,8 @@ describe('handler', () => {
     const result = await handler();
 
     expect(result).toEqual({ ok: true, checked: 1, unexplainedPublic: 1 });
-    expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(postDiscordEmbedsMock.mock.calls[0][0])).toContain('oops-public');
+    expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(postAlertEmbedsMock.mock.calls[0][0])).toContain('oops-public');
   });
 
   it('treats NoSuchBucketPolicy as "not public" rather than an error', async () => {
@@ -88,7 +88,7 @@ describe('handler', () => {
     const result = await handler();
 
     expect(result).toEqual({ ok: true, checked: 1, unexplainedPublic: 0 });
-    expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+    expect(postAlertEmbedsMock).not.toHaveBeenCalled();
   });
 
   it('skips (does not flag) a bucket whose policy status could not be determined', async () => {

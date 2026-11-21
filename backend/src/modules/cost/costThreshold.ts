@@ -9,7 +9,7 @@ import { evalThreshold } from '../ec2-management/thresholds.js';
  * `costThreshold.ts` — the SINGLE SOURCE OF TRUTH for evaluating `CostData`'s `ThresholdMeta`
  * (end-of-month forecast vs. previous month), used by BOTH `cost-service.ts` (displayed to the
  * frontend, recomputed from the cache on every request) AND `cost-collector.ts` (compares the
- * old/new threshold right after writing the new cache to decide whether to send a Discord notify
+ * old/new threshold right after writing the new cache to decide whether to send an alert hub notify
  * — see `lib/costReporting.ts`, `shouldNotifyCostThresholdChange`). Split out so these 2 places
  * can NEVER drift out of sync with each other, following the same principle already applied in
  * `modules/monitoring/monitoringThresholds.ts`.

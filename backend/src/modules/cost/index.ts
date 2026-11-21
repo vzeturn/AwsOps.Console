@@ -18,7 +18,7 @@
  * - `getCostData` — imported by `modules/export/export-csv.ts`.
  * - `findNewHighPriorityFindings` — imported by
  *   `infra-review-collector/assessment-report-builder.ts`.
- * - `sumEstimatedMonthlySavings` — imported by `infra-review-collector/discord-embeds.ts`.
+ * - `sumEstimatedMonthlySavings` — imported by `infra-review-collector/alert-embeds.ts`.
  * - `collectSavingsPlansCoverage` — imported by
  *   `infra-review-collector/assessment-report-builder.ts`.
  *

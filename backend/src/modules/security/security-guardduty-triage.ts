@@ -4,7 +4,7 @@ import { getEc2Client, getGuardDutyClient } from '../../core/aws-clients.js';
 // Lean_Lambda_Exception (Requirement 6.4a): direct imports, not `../alerting/index.js` — see the
 // exception comment in `agent/ai-ops-agent.ts` (same reason): `security-guardduty-triage-fn` is a
 // lean standalone Lambda.
-import { postDiscordEmbeds } from '../alerting/discordWebhook.js';
+import { postAlertEmbeds } from '../alerting/alertHook.js';
 import { buildOpsNotificationEmbed } from '../alerting/opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 
@@ -12,7 +12,7 @@ import { logger } from '../../shared-kernel/logger.js';
  * `security-guardduty-triage.ts` — a NEW Lambda, triggered directly by the SAME `GuardDutyFindingsRule`
  * EventBridge Rule that already forwards findings to `AlarmNotificationTopic` (see
  * `infra/ops-dashboard.yaml` — this Lambda is a SECOND target on that rule, not a replacement for
- * the existing Discord forwarding path).
+ * the existing alert hub forwarding path).
  *
  * WHAT THIS AUTOMATES
  *
@@ -24,7 +24,7 @@ import { logger } from '../../shared-kernel/logger.js';
  * that triage step into an automatic one: a NEW finding on a resource that ALREADY carries a
  * `SecurityException` tag is auto-archived (no manual `archive-findings` call needed every time
  * the sanctioned activity re-triggers GuardDuty); a finding on a resource WITHOUT that tag is left
- * untouched (still delivered to Discord by the existing `GuardDutyFindingsRule` -> `AlarmNotificationTopic`
+ * untouched (still delivered to alert hub by the existing `GuardDutyFindingsRule` -> `AlarmNotificationTopic`
  * path) so a genuinely new/unexplained finding is never silently dropped.
  *
  * WHY TAG-BASED, NOT A HARDCODED FINDING-TYPE/INSTANCE-ID SUPPRESSION FILTER
@@ -50,11 +50,11 @@ const guardduty = getGuardDutyClient();
 
 /** The tag key that marks a resource as having a reviewed, sanctioned exception — same key
  * `governance-exemption-auditor.ts` reads for staleness. Presence alone is enough here (value is
- * shown in the Discord embed for context, not matched against). */
+ * shown in the alert embed for context, not matched against). */
 const SECURITY_EXCEPTION_TAG_KEY = 'SecurityException';
 
 /** The subset of the EventBridge "GuardDuty Finding" event this Lambda actually reads — mirrors
- * `GuardDutyFindingSnsMessage['detail']` in `discord-alarm-notifier.ts` (same event shape, this
+ * `GuardDutyFindingSnsMessage['detail']` in `alarm-notifier.ts` (same event shape, this
  * Lambda is a second target on the same rule, not a second event format). */
 export interface GuardDutyFindingEventDetail {
   id: string;
@@ -88,7 +88,7 @@ function extractInstanceId(detail: GuardDutyFindingEventDetail): string | undefi
 }
 
 /** Looks up whether an EC2 instance carries `SecurityException` — returns the tag VALUE (for
- * context in the Discord embed) when present, `undefined` otherwise. Never throws: a lookup
+ * context in the alert embed) when present, `undefined` otherwise. Never throws: a lookup
  * failure (deleted instance, transient API error) is treated as "no exception found", the
  * fail-safe direction (leaves the finding to the existing normal alerting path rather than
  * auto-archiving on an unverified assumption). */
@@ -126,7 +126,7 @@ export async function handler(event: GuardDutyFindingEvent): Promise<TriageDecis
   const exceptionTagValue = instanceId ? await lookupInstanceExceptionTag(instanceId) : undefined;
 
   if (!exceptionTagValue) {
-    logger.info(`security-guardduty-triage: finding ${detail.id} (${detail.type}) has no matching SecurityException tag — left for normal Discord alerting.`);
+    logger.info(`security-guardduty-triage: finding ${detail.id} (${detail.type}) has no matching SecurityException tag — left for normal hub alerting.`);
     return { action: 'left-for-review' };
   }
 
@@ -152,7 +152,7 @@ export async function handler(event: GuardDutyFindingEvent): Promise<TriageDecis
     resourceArn: instanceId,
     extra: [{ name: 'Finding type', value: `\`${detail.type}\``, inline: true }],
   });
-  await postDiscordEmbeds([embed]);
+  await postAlertEmbeds([embed]);
 
   return { action: 'archived', exceptionTagValue };
 }

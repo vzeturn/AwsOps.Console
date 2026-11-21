@@ -13,7 +13,7 @@ import {
 // Lean_Lambda_Exception (Requirement 6.4a): direct imports, not `../alerting/index.js` — see the
 // exception comment in `agent/ai-ops-agent.ts` (same reason): `patch-scheduler-fn` is a lean
 // standalone Lambda.
-import { postDiscordEmbeds } from '../alerting/discordWebhook.js';
+import { postAlertEmbeds } from '../alerting/alertHook.js';
 import { buildOpsNotificationEmbed } from '../alerting/opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 
@@ -31,7 +31,7 @@ interface CandidateInstance {
   verifiedDate: string | undefined;
 }
 
-/** One instance's patch or verification failure — carries enough for a Discord reader to act
+/** One instance's patch or verification failure — carries enough for an alert hub reader to act
  * without opening CloudWatch Logs first (which instance, what specifically went wrong). Replaces
  * the previous "just a count" summary, which required a log dive to answer either question. */
 interface PatchFailure {
@@ -82,7 +82,7 @@ async function discoverSsmOnlineInstanceIds(): Promise<Set<string>> {
 
 /** The verification outcome for one pending patch command, used to decide the next step in handler().
  * `status` carries the raw SSM terminal status (e.g. "Failed", "TimedOut") ONLY when
- * `outcome === 'verify-failed'` — the concrete reason a Discord reader needs, matching the same
+ * `outcome === 'verify-failed'` — the concrete reason an alert hub reader needs, matching the same
  * "state the actual failure, not just that one occurred" principle `alarm-baseline-manager.ts`'s
  * `putFailures` list already follows. */
 type VerifyOutcome = { outcome: 'verified' } | { outcome: 'verify-failed'; status: string } | { outcome: 'still-pending' };
@@ -243,7 +243,7 @@ export async function handler(): Promise<PatchSchedulerResult> {
         ...(lines.length > 0 ? [{ name: 'Failed instances', value: lines.join('\n'), inline: false }] : []),
       ],
     });
-    await postDiscordEmbeds([embed]);
+    await postAlertEmbeds([embed]);
   }
 
   return { ok: true, patched, failed, verified, verifyFailed, scheduledRunningTotal: candidates.length };

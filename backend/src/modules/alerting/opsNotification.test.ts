@@ -205,7 +205,7 @@ describe('buildOpsNotificationEmbed — full field ordering (every slot populate
       impact: 'Customers cannot complete checkout; estimated 30% order drop.',
       likelyCauses: ['Third-party payment gateway timeout.', 'A recent deploy introduced a bug.'],
       where: 'payment-api (Production)',
-      who: 'system:discord-alarm-notifier',
+      who: 'system:alarm-notifier',
       when: '2026-09-21 16:30:00 +07:00',
       how: ['Check the payment partner status page.', 'Roll back the last deploy if one happened in the last hour.'],
       extra: [{ name: 'Error rate', value: '8.5%', inline: true }],

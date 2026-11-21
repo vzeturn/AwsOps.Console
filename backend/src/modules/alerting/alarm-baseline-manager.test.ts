@@ -44,9 +44,9 @@ vi.mock('@aws-sdk/client-ecs', () => ({
   DescribeServicesCommand: vi.fn().mockImplementation((input: unknown) => ({ input })),
 }));
 
-const postDiscordEmbedsMock = vi.fn().mockResolvedValue(undefined);
-vi.mock('./discordWebhook.js', () => ({
-  postDiscordEmbeds: (...args: unknown[]) => postDiscordEmbedsMock(...args),
+const postAlertEmbedsMock = vi.fn().mockResolvedValue(undefined);
+vi.mock('./alertHook.js', () => ({
+  postAlertEmbeds: (...args: unknown[]) => postAlertEmbedsMock(...args),
 }));
 
 const {
@@ -69,7 +69,7 @@ beforeEach(() => {
   ec2SendMock.mockReset();
   rdsSendMock.mockReset();
   elbSendMock.mockReset();
-  postDiscordEmbedsMock.mockClear();
+  postAlertEmbedsMock.mockClear();
   ecsSendMock.mockReset();
 });
 
@@ -599,7 +599,7 @@ describe('handler — reconcile loop (discover -> PutMetricAlarm -> DeleteAlarms
     await expect(handler()).resolves.toMatchObject({ ok: true, deleted: 0 });
   });
 
-  it('calls postDiscordEmbeds when PutMetricAlarm fails for at least 1 spec', async () => {
+  it('calls postAlertEmbeds when PutMetricAlarm fails for at least 1 spec', async () => {
     ec2SendMock.mockResolvedValue({ Reservations: [{ Instances: [{ InstanceId: 'i-x', State: { Name: 'running' }, LaunchTime: new Date(0) }] }] });
     rdsSendMock.mockResolvedValue({ DBInstances: [] });
     elbSendMock.mockResolvedValue({ LoadBalancers: [] });
@@ -612,8 +612,8 @@ describe('handler — reconcile loop (discover -> PutMetricAlarm -> DeleteAlarms
 
     await handler();
 
-    expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
-    const embeds = postDiscordEmbedsMock.mock.calls[0][0];
+    expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
+    const embeds = postAlertEmbedsMock.mock.calls[0][0];
     expect(embeds[0].title).toContain('alarm-baseline-manager');
     // Requirement: name WHICH alarms failed and WHY, not just a bare count — an operator should
     // be able to act from the notification alone, without opening CloudWatch Logs.
@@ -623,7 +623,7 @@ describe('handler — reconcile loop (discover -> PutMetricAlarm -> DeleteAlarms
     expect(failedField.value).toContain('Throttling');
   });
 
-  it('does NOT call postDiscordEmbeds when every PutMetricAlarm/DeleteAlarms call succeeds', async () => {
+  it('does NOT call postAlertEmbeds when every PutMetricAlarm/DeleteAlarms call succeeds', async () => {
     ec2SendMock.mockResolvedValue({ Reservations: [] });
     rdsSendMock.mockResolvedValue({ DBInstances: [] });
     elbSendMock.mockResolvedValue({ LoadBalancers: [] });
@@ -632,7 +632,7 @@ describe('handler — reconcile loop (discover -> PutMetricAlarm -> DeleteAlarms
 
     await handler();
 
-    expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+    expect(postAlertEmbedsMock).not.toHaveBeenCalled();
   });
 });
 

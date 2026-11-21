@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { RecommendationItem } from '@ops-dashboard/shared';
-import { buildNewFindingsEmbed, buildAutoRightsizeQueuedEmbed } from './discord-embeds.js';
+import { buildNewFindingsEmbed, buildAutoRightsizeQueuedEmbed } from './alert-embeds.js';
 
 function makeFinding(overrides: Partial<RecommendationItem> = {}): RecommendationItem {
   return {

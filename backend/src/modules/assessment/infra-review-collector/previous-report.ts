@@ -6,7 +6,7 @@ import { s3, ASSESSMENT_BUCKET_NAME } from './clients.js';
 /**
  * Reads `assessment-report.json` (the report from the PREVIOUS RUN, before it gets overwritten by
  * the current run) — used to diff for NEWLY arisen high-priority findings (see
- * `modules/cost/costReporting.ts`, `findNewHighPriorityFindings`), feeding the proactive Discord notify
+ * `modules/cost/costReporting.ts`, `findNewHighPriorityFindings`), feeding the proactive alert hub notify
  * (requirement: "cost optimization needs to be actioned effectively and promptly ... to avoid
  * unnecessary costs from piling up"). `NoSuchKey` (the very first run, the object never existed)
  * or any other read/parse error is treated the same as "no previous report" (empty

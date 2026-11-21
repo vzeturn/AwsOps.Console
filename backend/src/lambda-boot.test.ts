@@ -40,7 +40,7 @@ const ENTRY_BY_FUNCTION: Record<string, string> = {
   InfraReviewCollectorFunction: './modules/assessment/infra-review-collector.js',
   InfraCollectorFunction: './infra-collector.js',
   ActionExecutionFunction: './modules/actions/action-execution-handler.js',
-  DiscordAlarmNotifierFunction: './modules/alerting/discord-alarm-notifier.js',
+  DiscordAlarmNotifierFunction: './modules/alerting/alarm-notifier.js',
   AlarmBaselineManagerFunction: './modules/alerting/alarm-baseline-manager.js',
   HealthReportFunction: './modules/alerting/health-report.js',
   PatchSchedulerFunction: './modules/governance/patch-scheduler.js',

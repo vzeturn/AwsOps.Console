@@ -1,7 +1,7 @@
-import type { DiscordEmbed, DiscordEmbedField } from './discordWebhook.js';
+import type { AlertEmbed, AlertEmbedField } from './alertHook.js';
 
 /**
- * `opsNotification.ts` — a SHARED, incident-report-grade template for every operational Discord
+ * `opsNotification.ts` — a SHARED, incident-report-grade template for every operational alert hub
  * notification in this project (both automated Lambda alerts and ad-hoc manual ops actions
  * performed via CLI/chat).
  *
@@ -65,7 +65,7 @@ import type { DiscordEmbed, DiscordEmbedField } from './discordWebhook.js';
  *                   reusable field instead of every caller inventing its own link formatting.
  *   METADATA (new) -> a single, full-width, code-block-formatted field: Account · Region ·
  *                   Resource ARN · Owner — deliberately ONE field, not 4 separate ones, because
- *                   Discord's embed field grid only fits 3 inline fields per row and metadata is
+ *                   alert hub's embed field grid only fits 3 inline fields per row and metadata is
  *                   read together as a unit ("which account/region/resource is this"), never one
  *                   piece without the others.
  *   WHERE / WHO  -> UNCHANGED, still two inline fields exactly as before (kept for backward
@@ -98,7 +98,7 @@ export interface OpsNotificationLink {
 }
 
 const SEVERITY_META: Record<OpsNotificationSeverity, { emoji: string; color: number; label: string }> = {
-  // Colors match the palette already used across discord-alarm-notifier.ts/health-report.ts/
+  // Colors match the palette already used across alarm-notifier.ts/health-report.ts/
   // cost-collector.ts, so a manual notification and an automated one are visually consistent in
   // the same channel.
   critical: { emoji: '🔴', color: 0xed4245, label: 'CRITICAL' },
@@ -188,8 +188,8 @@ export interface OpsNotificationInput {
   owner?: string;
   /** Extra structured facts that don't fit any of the named slots above (counts, durations, ids)
    * — appended after every named field, in the given order. Each caller decides `inline` for its
-   * own fields, same as any other DiscordEmbedField. */
-  extra?: DiscordEmbedField[];
+   * own fields, same as any other AlertEmbedField. */
+  extra?: AlertEmbedField[];
   /** Overrides the default footer text ("ops-dashboard · Ops Notification"). */
   footer?: string;
   /** ISO-8601 timestamp overriding "now" for the embed's native timestamp slot — use when the
@@ -231,15 +231,15 @@ function formatMetadata(params: { account?: string; region?: string; resourceArn
 }
 
 /**
- * Builds one enterprise-grade Discord Embed from an incident-report-shaped input, dropping every
- * field that wasn't supplied. Pure function — no network/AWS calls — so both `postDiscordEmbeds`
+ * Builds one enterprise-grade alert embed from an incident-report-shaped input, dropping every
+ * field that wasn't supplied. Pure function — no network/AWS calls — so both `postAlertEmbeds`
  * (production Lambdas) and any ad-hoc/manual notifier can call it identically and get the exact
  * same layout.
  */
-export function buildOpsNotificationEmbed(input: OpsNotificationInput): DiscordEmbed {
+export function buildOpsNotificationEmbed(input: OpsNotificationInput): AlertEmbed {
   const meta = SEVERITY_META[input.severity];
   const sevTier = sevTierFor(input.severity, Boolean(input.impact));
-  const fields: DiscordEmbedField[] = [];
+  const fields: AlertEmbedField[] = [];
 
   if (input.impact) fields.push({ name: '🎯 Impact', value: input.impact, inline: false });
   if (input.likelyCauses && input.likelyCauses.length > 0) {

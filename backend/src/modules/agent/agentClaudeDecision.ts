@@ -5,14 +5,14 @@ import { logger } from '../../shared-kernel/logger.js';
 /**
  * `agentClaudeDecision.ts` — the ONLY place `ai-ops-agent.ts` talks to an LLM. Calls the Anthropic
  * Claude API directly (`https://api.anthropic.com/v1/messages`) via `fetch`, the same lightweight
- * approach `discordWebhook.ts` already uses for an external HTTPS API — no SDK dependency, just an
+ * approach `alertHook.ts` already uses for an external HTTPS API — no SDK dependency, just an
  * API key read from SSM Parameter Store and cached at cold start (`fetchCachedApiKey`, mirroring
- * `discordWebhook.ts`'s `fetchCachedWebhookUrl`).
+ * `alertHook.ts`'s `fetchCachedWebhookUrl`).
  *
  * Scope is deliberately narrow: given a set of findings that are ALREADY confirmed safe to
  * auto-execute (allowlisted actionType, reversible, not operator-only — see
  * `agentAutoExecutionPolicy.ts`) and ALREADY within budget (see `agentRateLimiter.ts`), ask the
- * model to pick WHICH of them are worth acting on right now and WHY, for the Discord notification
+ * model to pick WHICH of them are worth acting on right now and WHY, for the alert
  * a human will read afterward. The model has NO power to expand its own scope — see the "WHAT THE
  * MODEL CANNOT DO" section below.
  *
@@ -63,7 +63,7 @@ const EMPTY_DECISION: AgentDecisionResult = { selected: [] };
 
 /**
  * Name of the SSM Parameter holding the Anthropic API key (SecureString is preferred here — unlike
- * `DiscordWebhookUrlParameter`/`Ec2StateManagerServiceTokenParameter` elsewhere in this project,
+ * `AlertHookUrlParameter`/`Ec2StateManagerServiceTokenParameter` elsewhere in this project,
  * which use plain String only because `AWS::SSM::Parameter` in CloudFormation cannot create a
  * SecureString directly; this key is provisioned out-of-band via the AWS CLI specifically so it
  * CAN be a SecureString — see the CFN comment in `infra/ops-dashboard.yaml`).
@@ -79,7 +79,7 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const MAX_OUTPUT_TOKENS = 2048;
 
 /** Cached at module scope (cold start) — reads SSM only once per execution environment, the same
- * pattern `discordWebhook.ts`'s `fetchCachedWebhookUrl` already uses. Errors are NOT cached — the
+ * pattern `alertHook.ts`'s `fetchCachedWebhookUrl` already uses. Errors are NOT cached — the
  * next call within the same execution environment retries. */
 let cachedApiKeyPromise: Promise<string> | undefined;
 

@@ -14,7 +14,7 @@
  * convention).
  *
  * Lean_Lambda_Exception (Requirement 6.4a — same reasoning as `governance-exemption-auditor.ts`):
- * imports `discordWebhook.ts`/`opsNotification.ts` directly, not via `../alerting/index.js`.
+ * imports `alertHook.ts`/`opsNotification.ts` directly, not via `../alerting/index.js`.
  */
 import { DescribeLoadBalancersCommand, DescribeTagsCommand, DescribeTargetGroupsCommand } from '@aws-sdk/client-elastic-load-balancing-v2';
 import { DescribeInstancesCommand, StopInstancesCommand } from '@aws-sdk/client-ec2';
@@ -29,7 +29,7 @@ import { parseManagedGroupTags, decideIdleStop, type IdleStopSkipReason } from '
 // `LoadBalancer` dimension requires) instead of re-deriving it with a second, slightly different
 // implementation.
 import { extractAlbArnSuffix } from '../infra/infra-service.js';
-import { postDiscordEmbeds } from '../alerting/discordWebhook.js';
+import { postAlertEmbeds } from '../alerting/alertHook.js';
 import { buildOpsNotificationEmbed } from '../alerting/opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 
@@ -254,7 +254,7 @@ export async function handler(): Promise<IdleSchedulerTickResult> {
       extra: [{ name: 'Affected groups', value: lines.join('\n').slice(0, 1024), inline: false }],
       timestampOverride: now.toISOString(),
     });
-    await postDiscordEmbeds([embed]);
+    await postAlertEmbeds([embed]);
   }
 
   return { ok: true, groupsChecked: managed.length, stopped: stopped.length, misconfigured, errors: errored.length };

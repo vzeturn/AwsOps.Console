@@ -4,7 +4,7 @@ import { getRdsClient, getEc2Client } from '../../core/aws-clients.js';
 // Lean_Lambda_Exception (Requirement 6.4a): direct imports, not `../alerting/index.js` — see the
 // exception comment in `agent/ai-ops-agent.ts` (same reason): `downsize-scheduler-fn` is a lean
 // standalone Lambda.
-import { postDiscordEmbeds, type DiscordEmbed } from '../alerting/discordWebhook.js';
+import { postAlertEmbeds, type AlertEmbed } from '../alerting/alertHook.js';
 import { buildOpsNotificationEmbed } from '../alerting/opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 
@@ -29,7 +29,7 @@ export interface DownsizeSchedulerEvent {
 const rds = getRdsClient();
 const ec2 = getEc2Client();
 
-async function downsizeRds(instanceIdentifier: string, targetClass: string | undefined, availabilityZone: string | undefined): Promise<DiscordEmbed> {
+async function downsizeRds(instanceIdentifier: string, targetClass: string | undefined, availabilityZone: string | undefined): Promise<AlertEmbed> {
   try {
     const result = await rds.send(
       new ModifyDBInstanceCommand({
@@ -78,7 +78,7 @@ async function downsizeRds(instanceIdentifier: string, targetClass: string | und
   }
 }
 
-async function downsizeEc2(instanceId: string, targetType: string): Promise<DiscordEmbed> {
+async function downsizeEc2(instanceId: string, targetType: string): Promise<AlertEmbed> {
   // The Name tag is read from THIS SAME DescribeInstances call below (already needed to know
   // `State`) — no extra API call is made just to look up the name, avoiding a redundant
   // round-trip (STANDARDS.md §3).
@@ -139,7 +139,7 @@ export interface DownsizeSchedulerResult {
 }
 
 export async function handler(event: DownsizeSchedulerEvent): Promise<DownsizeSchedulerResult> {
-  const embeds: DiscordEmbed[] = [];
+  const embeds: AlertEmbed[] = [];
   let rdsOutcome: DownsizeSchedulerResult['rdsOutcome'] = 'skipped';
   let ec2Outcome: DownsizeSchedulerResult['ec2Outcome'] = 'skipped';
 
@@ -155,6 +155,6 @@ export async function handler(event: DownsizeSchedulerEvent): Promise<DownsizeSc
     ec2Outcome = embed.color === 0x57f287 ? 'success' : 'failure';
   }
 
-  if (embeds.length > 0) await postDiscordEmbeds(embeds);
+  if (embeds.length > 0) await postAlertEmbeds(embeds);
   return { ok: true, rdsOutcome, ec2Outcome };
 }

@@ -1,37 +1,31 @@
 import type { SNSEvent } from 'aws-lambda';
-import { GetParameterCommand } from '@aws-sdk/client-ssm';
 import { LookupEventsCommand, type Event as CloudTrailEvent } from '@aws-sdk/client-cloudtrail';
-import { getSsmClient, getEc2Client, getCloudTrailClient } from '../../core/aws-clients.js';
+import { getEc2Client, getCloudTrailClient } from '../../core/aws-clients.js';
 import { getRunbookForMetric } from '@ops-dashboard/shared';
 import { logger } from '../../shared-kernel/logger.js';
 // Lean_Lambda_Exception (Requirement 6.4a): direct import, not `../ec2-management/index.js` —
 // see the exception comment in `alarm-baseline-manager.ts` (same module, same reason):
-// `discord-alarm-notifier-fn` is a lean standalone Lambda and the barrel also re-exports handler
+// `alerting-notifier-fn` is a lean standalone Lambda and the barrel also re-exports handler
 // files that pull in `config.ts` at module scope, which this Lambda is never granted the env vars for.
 import { fetchEc2NameTag, fetchNatGatewayNameTag } from '../ec2-management/ec2NameResolver.js';
 import { formatRunbookField } from './runbookNotificationText.js';
+import { postAlertEmbeds } from './alertHook.js';
 
 /**
- * `discord-alarm-notifier.ts` — a NEW Lambda, the ONLY subscriber of every CloudWatch Alarm SNS
+ * `alarm-notifier.ts` — a NEW Lambda, the ONLY subscriber of every CloudWatch Alarm SNS
  * topic in the `AWS_Account` (requirement: "SNS should no longer send email but switch to
- * sending via a Discord webhook ... nicely formatted, enterprise-grade"). Receives
+ * sending via an alert hook ... nicely formatted, enterprise-grade"). Receives
  * `CloudWatch_Alarm` state-change notifications (the standard JSON payload CloudWatch sends via
- * SNS when `AlarmActions`/`OKActions` fire), reformats it into a Discord Embed, then POSTs it to
- * the Discord Incoming Webhook.
+ * SNS when `AlarmActions`/`OKActions` fire), reformats it into an alert embed, then POSTs it to
+ * the alert hook.
  *
  * Reads the region directly from `process.env` (set automatically by the Lambda runtime),
  * following the same pattern as `cost-collector.ts`/`monitoring-service.ts` — does NOT import
  * `config.ts` (that module validates the entire `AppConfig`, which is unrelated to this Lambda).
  *
- * The webhook URL is a SECRET — following the same convention already used for
- * StateManager's `x-service-token` (`ec2-state-manager-client.ts`): NOT set directly as a
- * Lambda environment variable value (a Lambda env var is visible in plaintext via
- * `lambda:GetFunctionConfiguration`/the console — higher leak risk), but stored in SSM Parameter
- * Store and read + cached at cold start via `GetParameterCommand`. The parameter name is read
- * from the `DISCORD_WEBHOOK_URL_PARAM_NAME` environment variable (not the secret value itself —
- * just a reference name, safe to set as an env var).
+ * Delivery goes through `alertHook.ts` (the Request Tracking hub alert hook; warning/critical are
+ * posted, info/OK are logged only).
  */
-const DISCORD_WEBHOOK_URL_PARAM_NAME = process.env.DISCORD_WEBHOOK_URL_PARAM_NAME as string;
 
 /** Which dimensions need name lookup instead of a raw ID — only dimensions whose value is an
  * unreadable ID (see `ec2NameResolver.ts`'s file header). Lookups are shared with
@@ -43,30 +37,9 @@ const NAME_LOOKUP_BY_DIMENSION: Record<string, (value: string) => Promise<string
   NatGatewayId: (natGatewayId) => fetchNatGatewayNameTag(getEc2Client(), natGatewayId),
 };
 
-/** Cached at module scope (cold start) — reads SSM only once per execution environment, same
- * pattern as `fetchCachedToken` in `ec2-state-manager-client.ts`. Errors aren't cached — the next
- * call retries. */
-let cachedWebhookUrlPromise: Promise<string> | undefined;
-
-function fetchCachedWebhookUrl(): Promise<string> {
-  if (!cachedWebhookUrlPromise) {
-    cachedWebhookUrlPromise = getSsmClient()
-      .send(new GetParameterCommand({ Name: DISCORD_WEBHOOK_URL_PARAM_NAME, WithDecryption: true }))
-      .then((result) => {
-        const value = result.Parameter?.Value;
-        if (!value) throw new Error(`SSM Parameter '${DISCORD_WEBHOOK_URL_PARAM_NAME}' has no value`);
-        return value;
-      })
-      .catch((err) => {
-        cachedWebhookUrlPromise = undefined;
-        throw err;
-      });
-  }
-  return cachedWebhookUrlPromise;
-}
 
 /** The standard JSON payload CloudWatch sends in the SNS message when a Metric_Alarm changes
- * state — lists ONLY the fields needed to format the Discord Embed (the real payload has more
+ * state — lists ONLY the fields needed to format the alert embed (the real payload has more
  * fields, see the AWS docs "Amazon CloudWatch Alarm state changes"). */
 interface CloudWatchAlarmSnsMessage {
   AlarmName: string;
@@ -164,7 +137,7 @@ function isGuardDutyFindingMessage(message: unknown): message is GuardDutyFindin
 /**
  * GuardDuty severity is a float from 0.1 to 8.9 (NOT a fixed enum) — bucketed into the 3 named
  * tiers GuardDuty's own console/documentation uses (Low 1.0-3.9, Medium 4.0-6.9, High 7.0-8.9),
- * so the Discord embed reads the same severity language an operator would see in the GuardDuty
+ * so the alert embed reads the same severity language an operator would see in the GuardDuty
  * console itself, rather than inventing a different scale. In practice this notifier only ever
  * receives Medium/High (the EventBridge Rule filters `severity >= 4`, see
  * `GuardDutyFindingsRule`), but the mapping stays total (covers the full range) so a future rule
@@ -209,7 +182,7 @@ function describeGuardDutyResource(resource: GuardDutyFindingSnsMessage['detail'
 }
 
 /**
- * Builds the Discord embed for a GuardDuty finding. Deliberately does NOT attempt to distinguish
+ * Builds the alert embed for a GuardDuty finding. Deliberately does NOT attempt to distinguish
  * "new" vs "recurring" findings — GuardDuty itself aggregates repeat occurrences of the same
  * finding type within a 6-hour window into ONE EventBridge event (see AWS docs "Findings
  * summary"), so by the time this notifier receives an event, GuardDuty has already done the
@@ -267,7 +240,7 @@ function buildGuardDutyFindingEmbed(message: GuardDutyFindingSnsMessage) {
 }
 
 /**
- * Builds the Discord embed for an RDS event.
+ * Builds the alert embed for an RDS event.
  *
  * ONE COLOUR for all of them, deliberately. The obvious design would key the colour off the event
  * category the way alarm embeds key off state — but the SNS payload does NOT carry the category, only a
@@ -394,9 +367,9 @@ function buildRdsEventEmbed(message: RdsEventSnsMessage) {
     fields.push({ name: '🏷️ Metadata', value: `\`\`\`\nRegion:   ${region}\nResource: ${message['Source ID']}\n\`\`\``, inline: false });
   }
 
-  // 'Event Time' is "YYYY-MM-DD HH:MM:SS.mmm" in UTC, which is NOT ISO 8601 and which Discord rejects
+  // 'Event Time' is "YYYY-MM-DD HH:MM:SS.mmm" in UTC, which is NOT ISO 8601 and which alert hub rejects
   // outright as a timestamp. Normalise it; if it still will not parse, omit the timestamp rather than
-  // sending a payload Discord will 400 on and losing the notification over a formatting detail.
+  // sending a payload alert hub will 400 on and losing the notification over a formatting detail.
   const parsed = new Date(message['Event Time'].replace(' ', 'T') + 'Z');
   const timestamp = Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
 
@@ -409,13 +382,13 @@ function buildRdsEventEmbed(message: RdsEventSnsMessage) {
   };
 }
 
-/** Discord Embed color (decimal, not a hex string — the Discord API requires an integer) keyed by
+/** alert embed color (decimal, not a hex string — the alert hub API requires an integer) keyed by
  * the alarm's new state — red for ALARM (critical), yellow for INSUFFICIENT_DATA (a
  * missing-data warning — needs configuration attention, NOT benign), green for OK (recovered). */
 const COLOR_BY_STATE: Record<CloudWatchAlarmSnsMessage['NewStateValue'], number> = {
-  ALARM: 0xed4245, // Discord "red"
-  INSUFFICIENT_DATA: 0xfaa61a, // Discord "orange/yellow"
-  OK: 0x57f287, // Discord "green"
+  ALARM: 0xed4245, // palette "red"
+  INSUFFICIENT_DATA: 0xfaa61a, // palette "orange/yellow"
+  OK: 0x57f287, // palette "green"
 };
 
 const EMOJI_BY_STATE: Record<CloudWatchAlarmSnsMessage['NewStateValue'], string> = {
@@ -668,12 +641,12 @@ async function lookupCisBenchmarkEvent(metricName: string, stateChangeTime: Date
     }
     return undefined;
   } catch (err) {
-    logger.error(`discord-alarm-notifier: CloudTrail lookup failed for CIS metric ${metricName} (continuing without enrichment)`, err);
+    logger.error(`alarm-notifier: CloudTrail lookup failed for CIS metric ${metricName} (continuing without enrichment)`, err);
     return undefined;
   }
 }
 
-/** Renders a `CisEventDetail` as one Discord embed field — the account/principal/IP/API-call/
+/** Renders a `CisEventDetail` as one alert embed field — the account/principal/IP/API-call/
  * resource detail a raw CIS metric count can never carry (see `lookupCisBenchmarkEvent`'s file
  * header). Explicitly states HOW the event was matched when it is a best-effort match rather than
  * an exact one (`errorCode`-matched for UnauthorizedAPICallsCount) — never presents a probable
@@ -692,9 +665,9 @@ function formatCisEventDetailField(detail: CisEventDetail): { name: string; valu
   return { name: '🔎 CloudTrail event found', value: lines.join('\n'), inline: false };
 }
 
-/** Builds a full, "enterprise-grade" Discord Embed object — with title/color/fields/timestamp/
- * footer, matching the Discord Webhook API format (`https://discord.com/developers/docs/resources/webhook`). */
-async function buildDiscordEmbed(message: CloudWatchAlarmSnsMessage) {
+/** Builds a full, "enterprise-grade" alert embed object — with title/color/fields/timestamp/
+ * footer. `alertHook.ts` flattens it into the hub payload {severity, title, text, tenant}. */
+async function buildAlarmEmbed(message: CloudWatchAlarmSnsMessage) {
   const state = message.NewStateValue;
   const trigger = message.Trigger;
 
@@ -772,26 +745,6 @@ async function buildDiscordEmbed(message: CloudWatchAlarmSnsMessage) {
   };
 }
 
-/** POSTs a Discord Webhook payload — Discord returns `204 No Content` on success, or `429` with
- * `retry_after` when rate-limited (Discord Webhooks are limited to 30 requests/min/webhook — this
- * is NOT a concern at the alarm volume of a single AWS_Account, but it's still handled explicitly
- * instead of silently swallowing errors, so a real failure — e.g. the webhook was deleted/changed
- * — shows up clearly in this Lambda's own CloudWatch Logs so the operator can spot a broken
- * notifier). */
-async function postToDiscord(payload: unknown): Promise<void> {
-  const webhookUrl = await fetchCachedWebhookUrl();
-  const res = await fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '(could not read response body)');
-    throw new Error(`Discord webhook returned error ${res.status}: ${body}`);
-  }
-}
-
 /**
  * The main handler — every `SNSEvent` can contain multiple `Records` (SNS batches several
  * messages into one invoke) — processes EACH record independently, so one failing record
@@ -807,17 +760,17 @@ export async function handler(event: SNSEvent): Promise<void> {
       // neither carries an AlarmName, so there is no ambiguity, and checking them first keeps the
       // alarm path below untouched.
       if (isRdsEventMessage(parsed)) {
-        await postToDiscord({ embeds: [buildRdsEventEmbed(parsed)] });
+        await postAlertEmbeds([buildRdsEventEmbed(parsed)]);
         continue;
       }
       if (isGuardDutyFindingMessage(parsed)) {
-        await postToDiscord({ embeds: [buildGuardDutyFindingEmbed(parsed)] });
+        await postAlertEmbeds([buildGuardDutyFindingEmbed(parsed)]);
         continue;
       }
 
       const message = parsed as CloudWatchAlarmSnsMessage;
       if (!message.AlarmName || !message.NewStateValue) {
-        logger.error('discord-alarm-notifier: SNS message matches neither the CloudWatch Alarm, RDS event, nor GuardDuty finding shape (ignoring)', record.Sns.MessageId);
+        logger.error('alarm-notifier: SNS message matches neither the CloudWatch Alarm, RDS event, nor GuardDuty finding shape (ignoring)', record.Sns.MessageId);
         continue;
       }
       // INSUFFICIENT_DATA -> OK is an INITIALIZATION transition (the alarm was just recreated by
@@ -826,15 +779,15 @@ export async function handler(event: SNSEvent): Promise<void> {
       // only arise from the alarm getting enough data for the first time, not from a prior ALARM
       // -> skip it to avoid a fake "resolved" notification masking a real ALARM notification.
       if (message.NewStateValue === 'OK' && message.OldStateValue === 'INSUFFICIENT_DATA') {
-        logger.info('discord-alarm-notifier: skipping INSUFFICIENT_DATA -> OK transition (alarm just initialized, not actually resolved)', message.AlarmName);
+        logger.info('alarm-notifier: skipping INSUFFICIENT_DATA -> OK transition (alarm just initialized, not actually resolved)', message.AlarmName);
         continue;
       }
-      await postToDiscord({ embeds: [await buildDiscordEmbed(message)] });
+      await postAlertEmbeds([await buildAlarmEmbed(message)]);
     } catch (err) {
       // Do NOT throw — one failing message shouldn't cause SNS to retry the whole batch (a
       // failing Lambda subscriber makes SNS retry per its own policy, which could send
       // duplicate notifications multiple times).
-      logger.error('discord-alarm-notifier: failed to send Discord notification for one message (ignoring, not throwing)', { messageId: record.Sns.MessageId, err });
+      logger.error('alarm-notifier: failed to send alert for one message (ignoring, not throwing)', { messageId: record.Sns.MessageId, err });
     }
   }
 }

@@ -6,7 +6,7 @@ process.env.ASSESSMENT_BUCKET_NAME = 'test-assessment-bucket';
 
 const ec2SendMock = vi.fn();
 const s3SendMock = vi.fn();
-const postDiscordEmbedsMock = vi.fn();
+const postAlertEmbedsMock = vi.fn();
 
 vi.mock('@aws-sdk/client-ec2', () => ({
   EC2Client: vi.fn().mockImplementation(() => ({ send: ec2SendMock })),
@@ -22,8 +22,8 @@ vi.mock('@aws-sdk/client-s3', () => ({
   PutObjectCommand: vi.fn().mockImplementation((input: unknown) => ({ __cmd: 'PutObject', input })),
 }));
 
-vi.mock('../alerting/discordWebhook.js', () => ({
-  postDiscordEmbeds: postDiscordEmbedsMock,
+vi.mock('../alerting/alertHook.js', () => ({
+  postAlertEmbeds: postAlertEmbedsMock,
 }));
 
 const fetchEc2RecommendationDetailMock = vi.fn();
@@ -42,10 +42,10 @@ const { handler } = await import('./ec2-rightsize-applier.js');
 beforeEach(() => {
   ec2SendMock.mockReset();
   s3SendMock.mockReset();
-  postDiscordEmbedsMock.mockReset();
+  postAlertEmbedsMock.mockReset();
   fetchEc2RecommendationDetailMock.mockReset();
   s3SendMock.mockResolvedValue({});
-  postDiscordEmbedsMock.mockResolvedValue(undefined);
+  postAlertEmbedsMock.mockResolvedValue(undefined);
   // Default: Compute Optimizer has no data (like an account not yet enrolled/a new instance) ->
   // every existing test (written before the cross-family logic existed) falls back to same-family
   // as before.
@@ -133,7 +133,7 @@ describe('ec2-rightsize-applier handler', () => {
     expect(ec2SendMock.mock.calls.some((c) => c[0].__cmd === 'ModifyInstanceAttribute')).toBe(false);
   });
 
-  it('direction "down" — pending, all conditions met -> changes InstanceType, clears pending tag, writes cooldown tag, writes audit, notifies Discord success', async () => {
+  it('direction "down" — pending, all conditions met -> changes InstanceType, clears pending tag, writes cooldown tag, writes audit, notifies alert hub success', async () => {
     ec2SendMock.mockImplementation((command: { __cmd: string }) => {
       if (command.__cmd === 'DescribeInstances') {
         return Promise.resolve({
@@ -178,10 +178,10 @@ describe('ec2-rightsize-applier handler', () => {
     expect(auditBody.executedBy).toBe('system:ec2-rightsize-applier');
     expect(auditBody.params.newInstanceType).toBe('r6i.16xlarge');
 
-    expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
+    expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
 
     // Requirement: a successful change should say how to undo it, not just what changed.
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     const rollbackField = embed.fields.find((f: { name: string }) => f.name === 'Rollback');
     expect(rollbackField).toBeDefined();
     expect(rollbackField.value).toContain('r6i.24xlarge');

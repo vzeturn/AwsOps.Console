@@ -12,7 +12,7 @@ vi.mock('@aws-sdk/client-rds', () => ({
   StartDBInstanceCommand: vi.fn().mockImplementation((input: unknown) => ({ __type: 'StartDBInstance', input })),
 }));
 
-vi.mock('../alerting/discordWebhook.js', () => ({ postDiscordEmbeds: vi.fn() }));
+vi.mock('../alerting/alertHook.js', () => ({ postAlertEmbeds: vi.fn() }));
 
 const { handler } = await import('./rds-nightly-scheduler.js');
 

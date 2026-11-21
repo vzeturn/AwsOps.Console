@@ -11,7 +11,7 @@ process.env.DOWNSIZE_SCHEDULER_FUNCTION_ARN = 'arn:aws:lambda:ap-southeast-1:123
 
 const ec2SendMock = vi.fn();
 const lambdaSendMock = vi.fn();
-const postDiscordEmbedsMock = vi.fn();
+const postAlertEmbedsMock = vi.fn();
 
 vi.mock('@aws-sdk/client-ec2', () => ({
   EC2Client: vi.fn().mockImplementation(() => ({ send: ec2SendMock })),
@@ -22,7 +22,7 @@ vi.mock('@aws-sdk/client-lambda', () => ({
   LambdaClient: vi.fn().mockImplementation(() => ({ send: lambdaSendMock })),
   InvokeCommand: vi.fn().mockImplementation((input: unknown) => ({ __cmd: 'Invoke', input })),
 }));
-vi.mock('../alerting/discordWebhook.js', () => ({ postDiscordEmbeds: postDiscordEmbedsMock }));
+vi.mock('../alerting/alertHook.js', () => ({ postAlertEmbeds: postAlertEmbedsMock }));
 
 const getComputedScheduleMock = vi.fn();
 vi.mock('./s3PolicyStore.js', () => ({
@@ -34,9 +34,9 @@ const { handler } = await import('./time-of-day-trigger.js');
 beforeEach(() => {
   ec2SendMock.mockReset();
   lambdaSendMock.mockReset();
-  postDiscordEmbedsMock.mockReset();
+  postAlertEmbedsMock.mockReset();
   getComputedScheduleMock.mockReset();
-  postDiscordEmbedsMock.mockResolvedValue(undefined);
+  postAlertEmbedsMock.mockResolvedValue(undefined);
   lambdaSendMock.mockResolvedValue({ StatusCode: 202 });
 });
 

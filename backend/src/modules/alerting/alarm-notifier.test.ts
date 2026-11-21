@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SNSEvent } from 'aws-lambda';
 
-process.env.DISCORD_WEBHOOK_URL_PARAM_NAME = '/abc/ops-dashboard/prod/discord-webhook-url';
+process.env.ALERT_HOOK_URL_PARAM_NAME = '/abc/ops-dashboard/prod/alert-hook-url';
 process.env.AWS_REGION = 'ap-southeast-1';
 
 const ssmSendMock = vi.fn();
@@ -22,7 +22,10 @@ vi.mock('@aws-sdk/client-cloudtrail', () => ({
   LookupEventsCommand: vi.fn().mockImplementation((input: unknown) => ({ __cmd: 'LookupEvents', input })),
 }));
 
-const { handler } = await import('./discord-alarm-notifier.js');
+const postMock = vi.fn();
+vi.mock('./alertHook.js', () => ({ postAlertEmbeds: postMock }));
+
+const { handler } = await import('./alarm-notifier.js');
 
 /** Build a minimal SNSEvent containing only the fields the handler actually uses — following the
  * same pattern as other tests in the codebase (mock only what's needed, don't copy the entire SDK shape). */
@@ -52,13 +55,11 @@ const ALARM_MESSAGE = {
   },
 };
 
-let fetchMock: ReturnType<typeof vi.fn>;
-
 beforeEach(() => {
-  fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204 });
-  vi.stubGlobal('fetch', fetchMock);
+  postMock.mockReset();
+  postMock.mockResolvedValue(undefined);
   ssmSendMock.mockReset();
-  ssmSendMock.mockResolvedValue({ Parameter: { Value: 'https://discord.com/api/webhooks/test-id/test-token' } });
+  ssmSendMock.mockResolvedValue({ Parameter: { Value: 'https://rt.example.test/hooks/alert/test-token' } });
   ec2SendMock.mockReset();
   ec2SendMock.mockResolvedValue({
     Reservations: [{ Instances: [{ Tags: [{ Key: 'Name', Value: 'abc-prod-ec2-gateway' }] }] }],
@@ -67,20 +68,12 @@ beforeEach(() => {
   cloudtrailSendMock.mockResolvedValue({ Events: [] });
 });
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
-describe('discord-alarm-notifier handler', () => {
-  it('POSTs exactly once to DISCORD_WEBHOOK_URL with an embed containing AlarmName/state/metric/dimension/reason', async () => {
+describe('alarm-notifier handler', () => {
+  it('hands exactly one embed to the alert hook containing AlarmName/state/metric/dimension/reason', async () => {
     await handler(buildSnsEvent([ALARM_MESSAGE]));
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, options] = fetchMock.mock.calls[0];
-    expect(url).toBe('https://discord.com/api/webhooks/test-id/test-token');
-    expect(options.method).toBe('POST');
-
-    const body = JSON.parse(options.body);
+    expect(postMock).toHaveBeenCalledTimes(1);
+    const body = { embeds: postMock.mock.calls[0][0] };
     expect(body.embeds).toHaveLength(1);
     const embed = body.embeds[0];
     expect(embed.title).toContain('abc-prod-ec2-cpu-high_i-0a1b2c3d4e5f60001');
@@ -98,37 +91,37 @@ describe('discord-alarm-notifier handler', () => {
 
   it('Embed color matches each NewStateValue (ALARM=red, INSUFFICIENT_DATA=yellow, OK=green)', async () => {
     await handler(buildSnsEvent([{ ...ALARM_MESSAGE, NewStateValue: 'OK' }]));
-    let body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    let body = { embeds: postMock.mock.calls[0][0] };
     expect(body.embeds[0].color).toBe(0x57f287);
 
-    fetchMock.mockClear();
+    postMock.mockClear();
     await handler(buildSnsEvent([{ ...ALARM_MESSAGE, NewStateValue: 'INSUFFICIENT_DATA' }]));
-    body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    body = { embeds: postMock.mock.calls[0][0] };
     expect(body.embeds[0].color).toBe(0xfaa61a);
   });
 
-  it('handles multiple Records independently in 1 batch -> calls fetch exactly once per Record', async () => {
+  it('handles multiple Records independently in 1 batch -> calls the alert hook exactly once per Record', async () => {
     await handler(buildSnsEvent([ALARM_MESSAGE, { ...ALARM_MESSAGE, AlarmName: 'alarm-2' }]));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(postMock).toHaveBeenCalledTimes(2);
   });
 
-  it('1 invalid JSON message (missing AlarmName) -> skipped, does not throw, does not call fetch for that record', async () => {
+  it('1 invalid JSON message (missing AlarmName) -> skipped, does not throw, does not call the alert hook for that record', async () => {
     await expect(
       handler(buildSnsEvent([{ NewStateValue: 'ALARM' }, ALARM_MESSAGE])),
     ).resolves.toBeUndefined();
-    // Only the valid record (ALARM_MESSAGE) calls fetch.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Only the valid record (ALARM_MESSAGE) calls the alert hook.
+    expect(postMock).toHaveBeenCalledTimes(1);
   });
 
-  it('fetch returns an error (Discord webhook down/changed) -> does not throw out of the handler, only logs the error', async () => {
-    fetchMock.mockResolvedValue({ ok: false, status: 404, text: () => Promise.resolve('Unknown Webhook') });
+  it('alert delivery rejects unexpectedly -> does not throw out of the handler, only logs the error', async () => {
+    postMock.mockRejectedValue(new Error('hub down'));
     await expect(handler(buildSnsEvent([ALARM_MESSAGE]))).resolves.toBeUndefined();
   });
 
   it('record.Sns.Message is not valid JSON -> skipped, does not throw', async () => {
     const event = { Records: [{ Sns: { Message: 'not-json{{{', MessageId: 'bad-1' } }] } as unknown as SNSEvent;
     await expect(handler(event)).resolves.toBeUndefined();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(postMock).not.toHaveBeenCalled();
   });
 
   it('InstanceId dimension -> looks up the Name tag via EC2 DescribeInstances and shows ONLY the name (without the raw InstanceId) in the "Related resource" field', async () => {
@@ -138,7 +131,7 @@ describe('discord-alarm-notifier handler', () => {
     const [sentCommand] = ec2SendMock.mock.calls[0];
     expect(sentCommand.input).toEqual({ InstanceIds: ['i-0a1b2c3d4e5f60001'] });
 
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const body = { embeds: postMock.mock.calls[0][0] };
     const resourceField = body.embeds[0].fields.find((f: { name: string }) => f.name === 'Related resource');
     expect(resourceField.value).toContain('abc-prod-ec2-gateway');
     expect(resourceField.value).not.toContain('i-0a1b2c3d4e5f60001');
@@ -148,7 +141,7 @@ describe('discord-alarm-notifier handler', () => {
     ec2SendMock.mockResolvedValue({ Reservations: [] });
     await handler(buildSnsEvent([ALARM_MESSAGE]));
 
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const body = { embeds: postMock.mock.calls[0][0] };
     const resourceField = body.embeds[0].fields.find((f: { name: string }) => f.name === 'Related resource');
     expect(resourceField.value).toContain('i-0a1b2c3d4e5f60001');
     expect(resourceField.value).not.toContain('(**');
@@ -158,20 +151,20 @@ describe('discord-alarm-notifier handler', () => {
     ec2SendMock.mockRejectedValue(new Error('AccessDenied'));
     await expect(handler(buildSnsEvent([ALARM_MESSAGE]))).resolves.toBeUndefined();
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(postMock).toHaveBeenCalledTimes(1);
+    const body = { embeds: postMock.mock.calls[0][0] };
     const resourceField = body.embeds[0].fields.find((f: { name: string }) => f.name === 'Related resource');
     expect(resourceField.value).toContain('i-0a1b2c3d4e5f60001');
   });
 
-  it('NewStateValue=OK, OldStateValue=INSUFFICIENT_DATA (alarm freshly recreated after instance restart) -> does NOT send to Discord', async () => {
+  it('NewStateValue=OK, OldStateValue=INSUFFICIENT_DATA (alarm freshly recreated after instance restart) -> does NOT send to alert hub', async () => {
     await handler(buildSnsEvent([{ ...ALARM_MESSAGE, NewStateValue: 'OK', OldStateValue: 'INSUFFICIENT_DATA' }]));
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(postMock).not.toHaveBeenCalled();
   });
 
-  it('NewStateValue=OK, OldStateValue=ALARM (a real incident was resolved) -> still sends to Discord normally', async () => {
+  it('NewStateValue=OK, OldStateValue=ALARM (a real incident was resolved) -> still sends to alert hub normally', async () => {
     await handler(buildSnsEvent([{ ...ALARM_MESSAGE, NewStateValue: 'OK', OldStateValue: 'ALARM' }]));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(postMock).toHaveBeenCalledTimes(1);
   });
 
   it('dimension is not InstanceId (e.g. DBInstanceIdentifier) -> does NOT call EC2 DescribeInstances', async () => {
@@ -188,7 +181,7 @@ describe('discord-alarm-notifier handler', () => {
 
   it('ALARM state with a documented metric (CPUUtilization) -> attaches a Runbook field with the next step + escalation condition', async () => {
     await handler(buildSnsEvent([ALARM_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const runbookField = embed.fields.find((f: { name: string }) => f.name === 'Runbook');
     expect(runbookField).toBeDefined();
     expect(runbookField.value).toContain('High CPU utilization');
@@ -198,13 +191,13 @@ describe('discord-alarm-notifier handler', () => {
 
   it('OK (recovered) state -> does NOT attach a Runbook field (nothing to remediate)', async () => {
     await handler(buildSnsEvent([{ ...ALARM_MESSAGE, NewStateValue: 'OK', OldStateValue: 'ALARM' }]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.fields.find((f: { name: string }) => f.name === 'Runbook')).toBeUndefined();
   });
 
   it('ALARM with a resolvable runbook -> SEV-1 in the title, states Impact', async () => {
     await handler(buildSnsEvent([ALARM_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.title).toContain('[SEV-1]');
     const impact = embed.fields.find((f: { name: string }) => f.name === '🎯 Impact');
     expect(impact).toBeDefined();
@@ -212,27 +205,27 @@ describe('discord-alarm-notifier handler', () => {
 
   it('ALARM on a metric with NO runbook entry -> SEV-2 (still a real breach, no known next step)', async () => {
     await handler(buildSnsEvent([{ ...ALARM_MESSAGE, Trigger: { ...ALARM_MESSAGE.Trigger, MetricName: 'SomeUnknownMetric' } }]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.title).toContain('[SEV-2]');
   });
 
   it('INSUFFICIENT_DATA -> SEV-3, no Impact field (the problem IS the missing data, already stated by Status)', async () => {
     await handler(buildSnsEvent([{ ...ALARM_MESSAGE, NewStateValue: 'INSUFFICIENT_DATA' }]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.title).toContain('[SEV-3]');
     expect(embed.fields.find((f: { name: string }) => f.name === '🎯 Impact')).toBeUndefined();
   });
 
   it('OK (recovered) -> no SEV tier at all, no Impact field', async () => {
     await handler(buildSnsEvent([{ ...ALARM_MESSAGE, NewStateValue: 'OK', OldStateValue: 'ALARM' }]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.title).not.toContain('SEV-');
     expect(embed.fields.find((f: { name: string }) => f.name === '🎯 Impact')).toBeUndefined();
   });
 
   it('includes a Links field pointing to the specific alarm in CloudWatch, built from the region code (not the display name)', async () => {
     await handler(buildSnsEvent([ALARM_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const links = embed.fields.find((f: { name: string }) => f.name === '🔗 Links');
     expect(links.value).toContain('ap-southeast-1.console.aws.amazon.com');
     expect(links.value).not.toContain('Asia Pacific (Singapore)');
@@ -240,7 +233,7 @@ describe('discord-alarm-notifier handler', () => {
 
   it('includes a Metadata field with the region and the full AlarmArn', async () => {
     await handler(buildSnsEvent([ALARM_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const metadata = embed.fields.find((f: { name: string }) => f.name === '🏷️ Metadata');
     expect(metadata.value).toContain('arn:aws:cloudwatch');
   });
@@ -249,7 +242,7 @@ describe('discord-alarm-notifier handler', () => {
     await handler(
       buildSnsEvent([{ ...ALARM_MESSAGE, Trigger: { ...ALARM_MESSAGE.Trigger, MetricName: 'SomeUncatalogedMetric' } }]),
     );
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.fields.find((f: { name: string }) => f.name === 'Runbook')).toBeUndefined();
   });
 });
@@ -274,7 +267,7 @@ const RDS_EVENT_MESSAGE = {
     'Storage size 600 GiB is approaching the maximum storage threshold 700 GiB. Increase the maximum storage threshold.',
 };
 
-describe('discord-alarm-notifier — RDS event subscription messages', () => {
+describe('alarm-notifier — RDS event subscription messages', () => {
   it('delivers an RDS event instead of dropping it as an unrecognised shape', async () => {
     // The regression this guards. Before RDS events were handled, this payload hit the
     // `!message.AlarmName` guard and was logged-and-skipped — so adding the subscription would have
@@ -282,8 +275,8 @@ describe('discord-alarm-notifier — RDS event subscription messages', () => {
     // project keeps running into: an empty result that looks like success.
     await handler(buildSnsEvent([RDS_EVENT_MESSAGE]));
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    expect(postMock).toHaveBeenCalledTimes(1);
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.title).toContain('abc-prod-rds-postgres');
     expect(embed.footer.text).toContain('RDS event');
     // The message itself must survive verbatim: it is the only part that says what is actually wrong.
@@ -291,32 +284,32 @@ describe('discord-alarm-notifier — RDS event subscription messages', () => {
     expect(what.value).toContain('approaching the maximum storage threshold');
   });
 
-  it("converts RDS's non-ISO 'Event Time' into a timestamp Discord accepts", async () => {
+  it("converts RDS's non-ISO 'Event Time' into a timestamp alert hub accepts", async () => {
     // RDS sends "YYYY-MM-DD HH:MM:SS.mmm" in UTC. Passing that straight through gets the whole webhook
     // rejected with a 400, which would lose the notification over a formatting detail.
     await handler(buildSnsEvent([RDS_EVENT_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.timestamp).toBe('2026-09-08T03:15:27.964Z');
   });
 
   it('omits the timestamp rather than sending an unparseable one', async () => {
     await handler(buildSnsEvent([{ ...RDS_EVENT_MESSAGE, 'Event Time': 'not a date at all' }]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.timestamp).toBeUndefined();
     // Still delivered — a bad date must not cost the message.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(postMock).toHaveBeenCalledTimes(1);
   });
 
   it('surfaces the searchable RDS-EVENT code, not just the documentation URL', async () => {
     await handler(buildSnsEvent([RDS_EVENT_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const evt = embed.fields.find((f: { name: string }) => f.name === 'Event');
     expect(evt.value).toContain('RDS-EVENT-0089');
   });
 
   it('a "storage approaching threshold" event attaches the FreeStorageSpace Runbook field', async () => {
     await handler(buildSnsEvent([RDS_EVENT_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const runbookField = embed.fields.find((f: { name: string }) => f.name === 'Runbook');
     expect(runbookField).toBeDefined();
     expect(runbookField.value).toContain('Low free storage space');
@@ -324,13 +317,13 @@ describe('discord-alarm-notifier — RDS event subscription messages', () => {
 
   it('an RDS event message with no recognized pattern -> no Runbook field, still delivered', async () => {
     await handler(buildSnsEvent([{ ...RDS_EVENT_MESSAGE, 'Event Message': 'Backup for abc-prod-rds-postgres has started.' }]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.fields.find((f: { name: string }) => f.name === 'Runbook')).toBeUndefined();
   });
 
   it('a Multi-AZ failover event -> SEV-3, states the impact (brief interruption + DNS propagation)', async () => {
     await handler(buildSnsEvent([{ ...RDS_EVENT_MESSAGE, 'Event Message': 'Multi-AZ instance failover started.' }]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.title).toContain('[SEV-3]');
     expect(embed.color).toBe(0xfaa61a);
     const impact = embed.fields.find((f: { name: string }) => f.name === '🎯 Impact');
@@ -339,14 +332,14 @@ describe('discord-alarm-notifier — RDS event subscription messages', () => {
 
   it('a rejected failover ("abandoning user requested failover") -> SEV-1, states the escalation-worthy impact', async () => {
     await handler(buildSnsEvent([{ ...RDS_EVENT_MESSAGE, 'Event Message': 'Abandoning user requested failover since a failover recently occurred on the database instance.' }]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.title).toContain('[SEV-1]');
     expect(embed.color).toBe(0xed4245);
   });
 
   it('a routine backup event ("Backing up DB instance") -> info severity, no SEV tier, no Impact field', async () => {
     await handler(buildSnsEvent([{ ...RDS_EVENT_MESSAGE, 'Event Message': 'Backing up DB instance.' }]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.title).not.toContain('SEV-');
     expect(embed.color).toBe(0x5865f2);
     expect(embed.fields.find((f: { name: string }) => f.name === '🎯 Impact')).toBeUndefined();
@@ -354,14 +347,14 @@ describe('discord-alarm-notifier — RDS event subscription messages', () => {
 
   it('an unclassified event message defaults to the original warning/amber behavior, unchanged', async () => {
     await handler(buildSnsEvent([{ ...RDS_EVENT_MESSAGE, 'Event Message': 'Something this project has never seen before.' }]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.color).toBe(0xfaa61a);
     expect(embed.title).toContain('[SEV-3]');
   });
 
   it('includes a Metadata field with the region and source id', async () => {
     await handler(buildSnsEvent([RDS_EVENT_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const metadata = embed.fields.find((f: { name: string }) => f.name === '🏷️ Metadata');
     expect(metadata.value).toContain('ap-southeast-1');
     expect(metadata.value).toContain('abc-prod-rds-postgres');
@@ -370,16 +363,16 @@ describe('discord-alarm-notifier — RDS event subscription messages', () => {
   it('still routes a CloudWatch alarm down the alarm path, unchanged', async () => {
     // The RDS check runs first, so this pins that it cannot swallow alarms.
     await handler(buildSnsEvent([ALARM_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.footer.text).toContain('CloudWatch Alarm');
     expect(embed.color).toBe(0xed4245);
   });
 
   it('handles a mixed batch: one alarm and one RDS event in the same invoke', async () => {
     await handler(buildSnsEvent([ALARM_MESSAGE, RDS_EVENT_MESSAGE]));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const footers = fetchMock.mock.calls.map(
-      (c) => JSON.parse(c[1].body).embeds[0].footer.text as string,
+    expect(postMock).toHaveBeenCalledTimes(2);
+    const footers = postMock.mock.calls.map(
+      (c) => (c[0] as { footer: { text: string } }[])[0].footer.text,
     );
     expect(footers.some((f) => f.includes('CloudWatch Alarm'))).toBe(true);
     expect(footers.some((f) => f.includes('RDS event'))).toBe(true);
@@ -387,7 +380,7 @@ describe('discord-alarm-notifier — RDS event subscription messages', () => {
 
   it('still ignores a payload that is neither shape, without throwing', async () => {
     await handler(buildSnsEvent([{ something: 'unrelated' }]));
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(postMock).not.toHaveBeenCalled();
   });
 });
 
@@ -424,19 +417,19 @@ const GUARDDUTY_FINDING_MESSAGE = {
   },
 };
 
-describe('discord-alarm-notifier — GuardDuty finding messages', () => {
+describe('alarm-notifier — GuardDuty finding messages', () => {
   it('delivers a GuardDuty finding instead of dropping it as an unrecognised shape', async () => {
     await handler(buildSnsEvent([GUARDDUTY_FINDING_MESSAGE]));
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    expect(postMock).toHaveBeenCalledTimes(1);
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.footer.text).toContain('GuardDuty');
     expect(embed.title).toContain('Command & Control server');
   });
 
   it('maps severity 8.0 to the HIGH tier (red)', async () => {
     await handler(buildSnsEvent([GUARDDUTY_FINDING_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.color).toBe(0xed4245);
     const severityField = embed.fields.find((f: { name: string }) => f.name === 'Severity');
     expect(severityField.value).toContain('HIGH');
@@ -445,7 +438,7 @@ describe('discord-alarm-notifier — GuardDuty finding messages', () => {
 
   it('maps severity 5.0 to the MEDIUM tier (orange)', async () => {
     await handler(buildSnsEvent([{ ...GUARDDUTY_FINDING_MESSAGE, detail: { ...GUARDDUTY_FINDING_MESSAGE.detail, severity: 5.0 } }]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.color).toBe(0xfaa61a);
     const severityField = embed.fields.find((f: { name: string }) => f.name === 'Severity');
     expect(severityField.value).toContain('MEDIUM');
@@ -453,14 +446,14 @@ describe('discord-alarm-notifier — GuardDuty finding messages', () => {
 
   it('maps severity 2.0 to the LOW tier (blue) — total coverage even though the EventBridge rule filters this out in practice', async () => {
     await handler(buildSnsEvent([{ ...GUARDDUTY_FINDING_MESSAGE, detail: { ...GUARDDUTY_FINDING_MESSAGE.detail, severity: 2.0 } }]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.color).toBe(0x5865f2);
   });
 
   it('shows the EC2 instance Name tag from the embedded finding detail, without an extra DescribeInstances call', async () => {
     await handler(buildSnsEvent([GUARDDUTY_FINDING_MESSAGE]));
     expect(ec2SendMock).not.toHaveBeenCalled();
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const resourceField = embed.fields.find((f: { name: string }) => f.name === 'Affected resource');
     expect(resourceField.value).toContain('abc-prod-ec2-gateway');
   });
@@ -474,7 +467,7 @@ describe('discord-alarm-notifier — GuardDuty finding messages', () => {
       },
     };
     await handler(buildSnsEvent([noNameTag]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const resourceField = embed.fields.find((f: { name: string }) => f.name === 'Affected resource');
     expect(resourceField.value).toContain('i-notag123');
   });
@@ -488,14 +481,14 @@ describe('discord-alarm-notifier — GuardDuty finding messages', () => {
       },
     };
     await handler(buildSnsEvent([s3Finding]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const resourceField = embed.fields.find((f: { name: string }) => f.name === 'Affected resource');
     expect(resourceField.value).toContain('abc-prod-assessment-report');
   });
 
   it('includes a working console deep-link built from the finding id and region', async () => {
     await handler(buildSnsEvent([GUARDDUTY_FINDING_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const linksField = embed.fields.find((f: { name: string }) => f.name === '🔗 Links');
     expect(linksField.value).toContain('finding-id-xyz');
     expect(linksField.value).toContain('ap-southeast-1');
@@ -503,7 +496,7 @@ describe('discord-alarm-notifier — GuardDuty finding messages', () => {
 
   it('HIGH severity -> SEV-1 in the title, states Impact', async () => {
     await handler(buildSnsEvent([GUARDDUTY_FINDING_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.title).toContain('[SEV-1]');
     expect(embed.fields.find((f: { name: string }) => f.name === '🎯 Impact')).toBeDefined();
   });
@@ -511,21 +504,21 @@ describe('discord-alarm-notifier — GuardDuty finding messages', () => {
   it('LOW severity -> no SEV tier, no Impact field (this Lambda\'s own rule filters these out in practice)', async () => {
     const lowFinding = { ...GUARDDUTY_FINDING_MESSAGE, detail: { ...GUARDDUTY_FINDING_MESSAGE.detail, severity: 2.0 } };
     await handler(buildSnsEvent([lowFinding]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.title).not.toContain('SEV-');
     expect(embed.fields.find((f: { name: string }) => f.name === '🎯 Impact')).toBeUndefined();
   });
 
   it('includes a Metadata field with the region', async () => {
     await handler(buildSnsEvent([GUARDDUTY_FINDING_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const metadata = embed.fields.find((f: { name: string }) => f.name === '🏷️ Metadata');
     expect(metadata.value).toContain('ap-southeast-1');
   });
 
   it('HIGH severity -> "Standard applied" field tells the operator to treat it as an active incident', async () => {
     await handler(buildSnsEvent([GUARDDUTY_FINDING_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const standardField = embed.fields.find((f: { name: string }) => f.name === 'Standard applied');
     expect(standardField).toBeDefined();
     expect(standardField.value).toContain('active security incident');
@@ -533,21 +526,21 @@ describe('discord-alarm-notifier — GuardDuty finding messages', () => {
 
   it('MEDIUM severity -> "Standard applied" field gives the same-business-day guidance', async () => {
     await handler(buildSnsEvent([{ ...GUARDDUTY_FINDING_MESSAGE, detail: { ...GUARDDUTY_FINDING_MESSAGE.detail, severity: 5.0 } }]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const standardField = embed.fields.find((f: { name: string }) => f.name === 'Standard applied');
     expect(standardField.value).toContain('business day');
   });
 
   it('still routes a CloudWatch alarm down the alarm path, unchanged, even after adding GuardDuty handling', async () => {
     await handler(buildSnsEvent([ALARM_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.footer.text).toContain('CloudWatch Alarm');
   });
 
   it('handles a mixed batch: one GuardDuty finding and one CloudWatch alarm in the same invoke', async () => {
     await handler(buildSnsEvent([GUARDDUTY_FINDING_MESSAGE, ALARM_MESSAGE]));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const footers = fetchMock.mock.calls.map((c) => JSON.parse(c[1].body).embeds[0].footer.text as string);
+    expect(postMock).toHaveBeenCalledTimes(2);
+    const footers = postMock.mock.calls.map((c) => (c[0] as { footer: { text: string } }[])[0].footer.text);
     expect(footers.some((f) => f.includes('GuardDuty'))).toBe(true);
     expect(footers.some((f) => f.includes('CloudWatch Alarm'))).toBe(true);
   });
@@ -599,14 +592,14 @@ function buildCloudTrailEvent(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe('discord-alarm-notifier — CIS Benchmark alarm CloudTrail enrichment', () => {
+describe('alarm-notifier — CIS Benchmark alarm CloudTrail enrichment', () => {
   it('attaches a "CloudTrail event found" field with principal/source IP/account/resource when CloudTrail has a matching event', async () => {
     cloudtrailSendMock.mockResolvedValue({ Events: [buildCloudTrailEvent()] });
 
     await handler(buildSnsEvent([CIS_ALARM_MESSAGE]));
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    expect(postMock).toHaveBeenCalledTimes(1);
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const field = embed.fields.find((f: { name: string }) => f.name === '🔎 CloudTrail event found');
     expect(field).toBeDefined();
     expect(field.value).toContain('AuthorizeSecurityGroupIngress');
@@ -631,8 +624,8 @@ describe('discord-alarm-notifier — CIS Benchmark alarm CloudTrail enrichment',
     cloudtrailSendMock.mockResolvedValue({ Events: [] });
     await handler(buildSnsEvent([CIS_ALARM_MESSAGE]));
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    expect(postMock).toHaveBeenCalledTimes(1);
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.fields.find((f: { name: string }) => f.name === '🔎 CloudTrail event found')).toBeUndefined();
   });
 
@@ -640,14 +633,14 @@ describe('discord-alarm-notifier — CIS Benchmark alarm CloudTrail enrichment',
     cloudtrailSendMock.mockRejectedValue(new Error('AccessDenied'));
     await expect(handler(buildSnsEvent([CIS_ALARM_MESSAGE]))).resolves.toBeUndefined();
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    expect(postMock).toHaveBeenCalledTimes(1);
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.fields.find((f: { name: string }) => f.name === '🔎 CloudTrail event found')).toBeUndefined();
   });
 
   it('a CIS alarm with a resolvable runbook (SecurityGroupChangesCount) -> SEV-1, correct runbook title', async () => {
     await handler(buildSnsEvent([CIS_ALARM_MESSAGE]));
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     expect(embed.title).toContain('[SEV-1]');
     const runbookField = embed.fields.find((f: { name: string }) => f.name === 'Runbook');
     expect(runbookField.value).toContain('security group changed');
@@ -669,7 +662,7 @@ describe('discord-alarm-notifier — CIS Benchmark alarm CloudTrail enrichment',
 
     const [sentCommand] = cloudtrailSendMock.mock.calls[0];
     expect(sentCommand.input.LookupAttributes).toBeUndefined(); // No single eventName filter — scans the window and filters client-side.
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const field = embed.fields.find((f: { name: string }) => f.name === '🔎 CloudTrail event found');
     expect(field.value).toContain('CreateAccessKey'); // The Root-identity event, not the first (IAMUser) one.
     expect(field.value).toContain('root');
@@ -692,7 +685,7 @@ describe('discord-alarm-notifier — CIS Benchmark alarm CloudTrail enrichment',
 
     const [sentCommand] = cloudtrailSendMock.mock.calls[0];
     expect(sentCommand.input.LookupAttributes).toBeUndefined();
-    const embed = JSON.parse(fetchMock.mock.calls[0][1].body).embeds[0];
+    const embed = { embeds: postMock.mock.calls[0][0] }.embeds[0];
     const field = embed.fields.find((f: { name: string }) => f.name === '🔎 CloudTrail event found');
     expect(field.value).toContain('DeleteBucket');
     expect(field.value).toContain('198.51.100.7');

@@ -38,7 +38,7 @@ export const Route = createFileRoute('/playbooks')({
  *   - "Finding" -> `RUNBOOK_BY_FINDING`, surfaced from the Assessment page's recommendations table.
  *   - "CIS Benchmark" -> the 12 `RUNBOOK_BY_METRIC` entries whose title cites a CIS control number
  *     (see `runbookCatalog.ts`'s CIS section) — these back the `CIS-*-Alarm` CloudWatch alarms,
- *     enriched with live CloudTrail detail by `discord-alarm-notifier.ts`'s `lookupCisBenchmarkEvent`.
+ *     enriched with live CloudTrail detail by `alarm-notifier.ts`'s `lookupCisBenchmarkEvent`.
  *   - "Metric" -> every other `RUNBOOK_BY_METRIC` entry, surfaced from the Monitoring page's alarm table.
  * Detected structurally (title matches `/CIS \d/`, exactly the same regex
  * `runbookCatalog.test.ts`'s own CIS coverage test already asserts on) rather than a second,

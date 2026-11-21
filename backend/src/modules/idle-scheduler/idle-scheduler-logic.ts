@@ -108,7 +108,7 @@ export interface WatchdogMechanismDrift {
 }
 
 /** `true` when ANY finding (mechanism-wide or per-group) indicates drift — used to decide whether
- * to publish the `WatchdogDriftDetected` metric and send a Discord alert. */
+ * to publish the `WatchdogDriftDetected` metric and send a hub alert. */
 export function hasAnyDrift(mechanism: WatchdogMechanismDrift, groups: WatchdogGroupDrift[]): boolean {
   if (mechanism.tickScheduleDisabled || mechanism.tickFunctionBlocked || mechanism.wakeFunctionBlocked) return true;
   return groups.some((g) => g.tagMissing || g.wakeAlarmActionsDisabled);

@@ -32,7 +32,7 @@ describe('formatRunbookField', () => {
     expect(formatRunbookField(makeEntry(), { inline: true }).inline).toBe(true);
   });
 
-  it('truncates a value longer than 1024 characters (Discord embed field limit)', () => {
+  it('truncates a value longer than 1024 characters (alert embed field limit)', () => {
     const longStep = 'x'.repeat(2000);
     const field = formatRunbookField(makeEntry({ remediation: [longStep] }));
     expect(field.value.length).toBeLessThanOrEqual(1024);

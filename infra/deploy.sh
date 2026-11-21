@@ -43,14 +43,14 @@ set -euo pipefail
 : "${VPC_FLOW_LOGS_ENABLED:=}"
 : "${VPC_ID_PRIMARY:=}"
 : "${VPC_ID_SECONDARY:=}"
-# DiscordWebhookUrlParamName/Ec2StateManagerServiceTokenParamName no longer take a VALUE through
+# AlertHookUrlParamName/Ec2StateManagerServiceTokenParamName no longer take a VALUE through
 # this script at all: both are SecureString parameters that must be created/updated MANUALLY,
 # once, outside of CloudFormation:
-#   aws ssm put-parameter --name "/${ORG}/${PROJECT}/${ENVIRONMENT}/discord-webhook-url" --type SecureString --value "<webhook url>" --overwrite
+#   aws ssm put-parameter --name "/${ORG}/${PROJECT}/${ENVIRONMENT}/alert-hook-url" --type SecureString --value "<alert hook url>" --overwrite
 #   aws ssm put-parameter --name "/${ORG}/${PROJECT}/${ENVIRONMENT}/ec2-state-manager-service-token" --type SecureString --value "<token>" --overwrite
 # (the same pattern AgentClaudeApiKeyParamName uses). This script only needs the PARAMETER NAME,
 # which has a default in ops-dashboard.yaml and never has to be overridden unless deploying to a
-# different org, see DiscordWebhookUrlParamName/Ec2StateManagerServiceTokenParamName in
+# different org, see AlertHookUrlParamName/Ec2StateManagerServiceTokenParamName in
 # ops-dashboard.yaml.
 
 STACK_NAME="${ORG}-${PROJECT}-${ENVIRONMENT}"

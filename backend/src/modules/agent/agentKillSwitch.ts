@@ -4,7 +4,7 @@ import { logger } from '../../shared-kernel/logger.js';
 
 /**
  * `agentKillSwitch.ts` — reads the `AGENT_AUTO_EXECUTE_ENABLED` SSM Parameter fresh on EVERY call,
- * with NO cross-invocation caching (unlike `discordWebhook.ts`'s `fetchCachedWebhookUrl`, which
+ * with NO cross-invocation caching (unlike `alertHook.ts`'s `fetchCachedWebhookUrl`, which
  * caches for the lifetime of the execution environment because a webhook URL essentially never
  * changes). The entire point of a kill switch is that flipping it takes effect immediately — an
  * operator who just noticed the agent behaving badly and set this parameter to "false" cannot be
