@@ -48,7 +48,7 @@ import {
   ECS_MEMORY_CRITICAL_PERCENT,
 } from '../monitoring/monitoringThresholds.js';
 import { computeUptimeMinutes } from '../ec2-management/ec2Uptime.js';
-import { postDiscordEmbeds } from './discordWebhook.js';
+import { postAlertEmbeds } from './alertHook.js';
 import { buildOpsNotificationEmbed } from './opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 
@@ -72,10 +72,10 @@ import { logger } from '../../shared-kernel/logger.js';
  * this "standard alarm set" scope.
  *
  * ALL standard alarms SHARE 1 SNS topic (`ALARM_NOTIFICATION_TOPIC_ARN`) for both `AlarmActions`
- * AND `OKActions` — that topic has EXACTLY 1 subscriber, `discord-alarm-notifier` (requirement:
- * "SNS should stop sending email and switch to a Discord webhook"). Does NOT set
+ * AND `OKActions` — that topic has EXACTLY 1 subscriber, `alarm-notifier` (requirement:
+ * "SNS should stop sending email and switch to an alert hook"). Does NOT set
  * `InsufficientDataActions` — an `INSUFFICIENT_DATA` state (e.g. from CloudWatch being 1 data
- * period behind) will NOT send a Discord notification (avoiding meaningless noise), but still
+ * period behind) will NOT send an alert (avoiding meaningless noise), but still
  * displays correctly on the CloudWatch Console if someone needs to look it up.
  */
 
@@ -393,7 +393,7 @@ interface HostMetricRule {
   metricName: string;
   threshold: number;
   comparisonOperator: 'GreaterThanOrEqualToThreshold' | 'LessThanOrEqualToThreshold';
-  /** Distinguishes the alarm name; also the part a human reads first in Discord. */
+  /** Distinguishes the alarm name; also the part a human reads first in alert hub. */
   slug: string;
   /**
    * When set, the metric is only MEANINGFUL per value of this dimension, so one alarm is created
@@ -582,7 +582,7 @@ async function discoverOnlineResources(): Promise<OnlineResourceInventory> {
 // ---- Build AlarmSpec[] per resource type — THRESHOLDS come from modules/monitoring/monitoringThresholds.ts (the
 // single source of truth, shared with Monitoring_Page). Only the CRITICAL tier is used for the
 // REAL standard alarms (unlike Monitoring_Page, which shows 2 visual tiers, warn/critical) —
-// avoiding Discord getting spammed by "warn"-level alerts while someone is watching the dashboard
+// avoiding alert hub getting spammed by "warn"-level alerts while someone is watching the dashboard
 // live; standard alarms should only fire when action can't wait (staying true to "always ready
 // for operations" while still avoiding alert fatigue). ----
 
@@ -914,8 +914,8 @@ async function listExistingBaselineAlarmNames(): Promise<Set<string>> {
 const PUT_ALARM_MAX_ATTEMPTS = 4;
 const PUT_ALARM_BASE_DELAY_MS = 500;
 
-/** Max number of individual failed-alarm entries listed in the reconcile-error Discord embed —
- * same Discord Embed 1024-char field-size reasoning already applied to `MAX_LISTED_ALARMS` in
+/** Max number of individual failed-alarm entries listed in the reconcile-error alert embed —
+ * same alert embed 1024-char field-size reasoning already applied to `MAX_LISTED_ALARMS` in
  * `health-report.ts`. */
 const MAX_LISTED_ALARM_FAILURES = 10;
 
@@ -988,7 +988,7 @@ export async function handler(): Promise<{ ok: true; created: number; deleted: n
   // before they can even tell whether this is worth acting on right now; showing the actual names
   // (and each error's own message) directly in the notification means the common case ("it's
   // always the same 2 host alarms hitting Throttling") doesn't require opening CloudWatch Logs at
-  // all. Bounded so 1 mass failure (e.g. a bad IAM change) can't blow out the Discord embed's
+  // all. Bounded so 1 mass failure (e.g. a bad IAM change) can't blow out the alert embed's
   // field size limit.
   const putFailures: { alarmName: string; message: string }[] = [];
   for (const spec of desiredSpecs) {
@@ -1061,7 +1061,7 @@ export async function handler(): Promise<{ ok: true; created: number; deleted: n
       region,
       extra,
     });
-    await postDiscordEmbeds([embed]);
+    await postAlertEmbeds([embed]);
   }
 
   return { ok: true, created, deleted };

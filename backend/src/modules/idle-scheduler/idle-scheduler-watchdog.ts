@@ -9,11 +9,11 @@
  * Deliberately does NOT touch EC2/RDS running/stopped state — its job is to keep the MECHANISM
  * itself always enabled, never to force a particular instance up or down (see `idleScheduler.ts`'s
  * file header). Any drift found is corrected AND published as a CloudWatch metric
- * (`WatchdogDriftDetected`) plus a Discord alert — silent auto-heal alone would let a pattern of
+ * (`WatchdogDriftDetected`) plus a hub alert — silent auto-heal alone would let a pattern of
  * repeated disabling go unnoticed (same reasoning as `alarm-baseline-manager.ts`'s
  * `ALARM_BASELINE_EXCLUDED_RESOURCES` staleness concern).
  *
- * Lean_Lambda_Exception (Requirement 6.4a): imports `discordWebhook.ts`/`opsNotification.ts`
+ * Lean_Lambda_Exception (Requirement 6.4a): imports `alertHook.ts`/`opsNotification.ts`
  * directly, not via `../alerting/index.js`.
  */
 import { DescribeLoadBalancersCommand, DescribeTagsCommand } from '@aws-sdk/client-elastic-load-balancing-v2';
@@ -25,7 +25,7 @@ import { tagsToMap } from '../../core/awsTags.js';
 import { fetchAllPages } from '../../core/pagination.js';
 import { parseManagedGroupTags, hasAnyDrift, type WatchdogGroupDrift, type WatchdogMechanismDrift } from './idle-scheduler-logic.js';
 import { buildWakeAlarmName, albNameFromWakeAlarmName, WAKE_ALARM_NAME_PREFIX } from './idle-scheduler-naming.js';
-import { postDiscordEmbeds } from '../alerting/discordWebhook.js';
+import { postAlertEmbeds } from '../alerting/alertHook.js';
 import { buildOpsNotificationEmbed } from '../alerting/opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 
@@ -217,7 +217,7 @@ export async function handler(): Promise<IdleSchedulerWatchdogResult> {
       how: 'The mechanism self-heals automatically, EXCEPT a missing idle-scheduler:managed tag (that case needs a human/API decision — re-register the group via POST /idle-scheduler if it should still be managed). If this keeps recurring, investigate who/what keeps disabling it.',
       extra: [{ name: 'Findings', value: lines.join('\n').slice(0, 1024), inline: false }],
     });
-    await postDiscordEmbeds([embed]);
+    await postAlertEmbeds([embed]);
   }
 
   return { ok: true, driftDetected, mechanism, groups };

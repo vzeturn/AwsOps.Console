@@ -15,7 +15,7 @@
  * `idleScheduler.ts`), so re-reading them here means a tag update takes effect on the very next
  * wake with no redeploy, exactly like the tick Lambda.
  *
- * Lean_Lambda_Exception (Requirement 6.4a): imports `discordWebhook.ts`/`opsNotification.ts`
+ * Lean_Lambda_Exception (Requirement 6.4a): imports `alertHook.ts`/`opsNotification.ts`
  * directly, not via `../alerting/index.js`.
  */
 import type { SNSEvent } from 'aws-lambda';
@@ -26,7 +26,7 @@ import { getElasticLoadBalancingV2Client, getEc2Client, getRdsClient } from '../
 import { tagsToMap } from '../../core/awsTags.js';
 import { parseManagedGroupTags } from './idle-scheduler-logic.js';
 import { WAKE_ALARM_NAME_PREFIX, albNameFromWakeAlarmName } from './idle-scheduler-naming.js';
-import { postDiscordEmbeds } from '../alerting/discordWebhook.js';
+import { postAlertEmbeds } from '../alerting/alertHook.js';
 import { buildOpsNotificationEmbed } from '../alerting/opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 
@@ -127,7 +127,7 @@ export async function handler(event: SNSEvent): Promise<{ ok: true; processed: n
         why: result.error,
         how: `Manually start the EC2 instance + RDS instance behind ALB ${albName}, then investigate why the automatic wake failed.`,
       });
-      await postDiscordEmbeds([embed]);
+      await postAlertEmbeds([embed]);
     } else {
       logger.info(`idle-scheduler-wake: woke group for ALB ${albName}: ec2=${result.ec2} rds=${result.rds}`);
     }

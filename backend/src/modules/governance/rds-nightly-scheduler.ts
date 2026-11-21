@@ -13,14 +13,14 @@
  * comment in `idle-scheduler-tick.ts` — RDS is simply no longer tagged on the ALB).
  *
  * Lean_Lambda_Exception (Requirement 6.4a — same reasoning as `idle-scheduler-tick.ts`): imports
- * `discordWebhook.ts`/`opsNotification.ts` directly, not via `../alerting/index.js`.
+ * `alertHook.ts`/`opsNotification.ts` directly, not via `../alerting/index.js`.
  */
 import { DescribeDBInstancesCommand, ListTagsForResourceCommand, StartDBInstanceCommand, StopDBInstanceCommand } from '@aws-sdk/client-rds';
 import { getRdsClient } from '../../core/aws-clients.js';
 import { tagsToMap } from '../../core/awsTags.js';
 import { fetchAllPages } from '../../core/pagination.js';
 import { RDS_NIGHTLY_SCHEDULER_MANAGED_TAG_KEY } from '@ops-dashboard/shared';
-import { postDiscordEmbeds } from '../alerting/discordWebhook.js';
+import { postAlertEmbeds } from '../alerting/alertHook.js';
 import { buildOpsNotificationEmbed } from '../alerting/opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 
@@ -97,11 +97,11 @@ export async function handler(event: RdsNightlySchedulerEvent): Promise<RdsNight
         why: failed.map(([id, v]) => `${id}: ${v}`).join('\n').slice(0, 1024),
         how: `Check CloudWatch Logs for /aws/lambda/*-rds-nightly-scheduler-fn, and manually ${action} the instance if needed.`,
       });
-      await postDiscordEmbeds([embed]);
+      await postAlertEmbeds([embed]);
     } catch (err) {
       // The action was already invoked (or genuinely failed) before this point — never throw here,
       // otherwise the EventBridge Scheduler retry would re-run the whole handler.
-      logger.error('rds-nightly-scheduler: postDiscordEmbeds failed', err);
+      logger.error('rds-nightly-scheduler: postAlertEmbeds failed', err);
     }
   }
 

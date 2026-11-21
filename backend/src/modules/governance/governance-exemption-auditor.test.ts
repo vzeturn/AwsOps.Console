@@ -15,15 +15,15 @@ vi.mock('@aws-sdk/client-elastic-load-balancing-v2', () => ({
   DescribeTagsCommand: vi.fn().mockImplementation((input: unknown) => ({ __cmd: 'DescribeTags', input })),
 }));
 
-const postDiscordEmbedsMock = vi.fn();
-vi.mock('../alerting/discordWebhook.js', () => ({ postDiscordEmbeds: postDiscordEmbedsMock }));
+const postAlertEmbedsMock = vi.fn();
+vi.mock('../alerting/alertHook.js', () => ({ postAlertEmbeds: postAlertEmbedsMock }));
 
 const { handler, isReviewOverdue, findOverdueExemptions } = await import('./governance-exemption-auditor.js');
 
 beforeEach(() => {
   ec2SendMock.mockReset();
   elbSendMock.mockReset();
-  postDiscordEmbedsMock.mockReset();
+  postAlertEmbedsMock.mockReset();
 });
 
 describe('isReviewOverdue', () => {
@@ -86,9 +86,9 @@ describe('handler', () => {
     const result = await handler();
 
     expect(result).toEqual({ ok: true, exempted: 2, overdue: 1 });
-    expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(postDiscordEmbedsMock.mock.calls[0][0])).toContain('i-overdue');
-    expect(JSON.stringify(postDiscordEmbedsMock.mock.calls[0][0])).not.toContain('i-fine');
+    expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(postAlertEmbedsMock.mock.calls[0][0])).toContain('i-overdue');
+    expect(JSON.stringify(postAlertEmbedsMock.mock.calls[0][0])).not.toContain('i-fine');
   });
 
   it('an ops-dashboard:monitoring-exempt tag with NO review date is never flagged', async () => {
@@ -100,7 +100,7 @@ describe('handler', () => {
     const result = await handler();
 
     expect(result).toEqual({ ok: true, exempted: 1, overdue: 0 });
-    expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+    expect(postAlertEmbedsMock).not.toHaveBeenCalled();
   });
 
   it('reports an overdue ALB exception too', async () => {
@@ -118,7 +118,7 @@ describe('handler', () => {
     const result = await handler();
 
     expect(result).toEqual({ ok: true, exempted: 1, overdue: 1 });
-    expect(JSON.stringify(postDiscordEmbedsMock.mock.calls[0][0])).toContain('abc-stg-alb');
+    expect(JSON.stringify(postAlertEmbedsMock.mock.calls[0][0])).toContain('abc-stg-alb');
   });
 
   it('a resource with neither exemption tag is skipped entirely (not counted, not flagged)', async () => {

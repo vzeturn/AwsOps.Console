@@ -19,9 +19,9 @@ vi.mock('@aws-sdk/client-ssm', () => ({
   GetCommandInvocationCommand: vi.fn().mockImplementation((input: unknown) => ({ __cmd: 'GetCommandInvocation', input })),
 }));
 
-const postDiscordEmbedsMock = vi.fn().mockResolvedValue(undefined);
-vi.mock('../alerting/discordWebhook.js', () => ({
-  postDiscordEmbeds: (...args: unknown[]) => postDiscordEmbedsMock(...args),
+const postAlertEmbedsMock = vi.fn().mockResolvedValue(undefined);
+vi.mock('../alerting/alertHook.js', () => ({
+  postAlertEmbeds: (...args: unknown[]) => postAlertEmbedsMock(...args),
 }));
 
 const { handler } = await import('./patch-scheduler.js');
@@ -29,7 +29,7 @@ const { handler } = await import('./patch-scheduler.js');
 beforeEach(() => {
   ec2SendMock.mockReset();
   ssmSendMock.mockReset();
-  postDiscordEmbedsMock.mockClear();
+  postAlertEmbedsMock.mockClear();
 });
 
 /** An instance running for a long time (>> 30 minutes), with no pending/verified tag yet, has the schedule:start tag. */
@@ -211,8 +211,8 @@ describe('patch-scheduler handler — verifies the patch result via GetCommandIn
   });
 });
 
-describe('patch-scheduler handler — Discord notification on error', () => {
-  it('calls postDiscordEmbeds when an instance fails to patch/verify', async () => {
+describe('patch-scheduler handler — alert on error', () => {
+  it('calls postAlertEmbeds when an instance fails to patch/verify', async () => {
     mockDescribeInstances([scheduledEligibleInstance('i-fail1')]);
     ssmSendMock.mockImplementation((command: { __cmd: string }) => {
       if (command.__cmd === 'DescribeInstanceInformation') {
@@ -226,18 +226,18 @@ describe('patch-scheduler handler — Discord notification on error', () => {
 
     await handler();
 
-    expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
-    const embeds = postDiscordEmbedsMock.mock.calls[0][0];
+    expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
+    const embeds = postAlertEmbedsMock.mock.calls[0][0];
     expect(embeds[0].title).toContain('patch-scheduler');
   });
 
-  it('does NOT call postDiscordEmbeds when everything succeeds (failed=0, verifyFailed=0)', async () => {
+  it('does NOT call postAlertEmbeds when everything succeeds (failed=0, verifyFailed=0)', async () => {
     mockDescribeInstances([]);
     ssmSendMock.mockResolvedValue({});
 
     await handler();
 
-    expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+    expect(postAlertEmbedsMock).not.toHaveBeenCalled();
   });
 
   it('a patch failure names the instance (Name tag) and the actual error message, not just a count', async () => {
@@ -257,7 +257,7 @@ describe('patch-scheduler handler — Discord notification on error', () => {
 
     await handler();
 
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     const field = embed.fields.find((f: { name: string }) => f.name === 'Failed instances');
     expect(field.value).toContain('abc-prod-ec2-webserver');
     expect(field.value).toContain('ThrottlingException: Rate exceeded');
@@ -286,7 +286,7 @@ describe('patch-scheduler handler — Discord notification on error', () => {
 
     await handler();
 
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     const field = embed.fields.find((f: { name: string }) => f.name === 'Failed instances');
     expect(field.value).toContain('abc-prod-ec2-appserver');
     expect(field.value).toContain('TimedOut');
@@ -303,7 +303,7 @@ describe('patch-scheduler handler — Discord notification on error', () => {
 
     await handler();
 
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     const field = embed.fields.find((f: { name: string }) => f.name === 'Failed instances');
     expect(field.value).toContain('i-no-name-tag');
   });

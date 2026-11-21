@@ -35,7 +35,7 @@ export const AGENT_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 /** Maximum auto-executions allowed within the rolling window, across ALL actionTypes combined —
  * not per-actionType. A conservative number: enough to make a real dent in a backlog of findings
  * over a day of runs, small enough that hitting the cap is a clear, noticeable signal (which
- * `ai-ops-agent.ts` surfaces via Discord) rather than routine background noise. */
+ * `ai-ops-agent.ts` surfaces via alert hub) rather than routine background noise. */
 export const AGENT_RATE_LIMIT_MAX_EXECUTIONS = 5;
 
 const RATE_LIMIT_STATE_KEY = 'agent-state/rate-limit.json';

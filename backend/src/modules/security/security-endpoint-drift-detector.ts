@@ -4,7 +4,7 @@ import { getEc2Client, getSsmClient } from '../../core/aws-clients.js';
 // Lean_Lambda_Exception (Requirement 6.4a): direct imports, not `../alerting/index.js` — see the
 // exception comment in `agent/ai-ops-agent.ts` (same reason):
 // `security-endpoint-drift-detector-fn` is a lean standalone Lambda.
-import { postDiscordEmbeds } from '../alerting/discordWebhook.js';
+import { postAlertEmbeds } from '../alerting/alertHook.js';
 import { buildOpsNotificationEmbed } from '../alerting/opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 import type { DriftFinding } from './endpoint-drift-report.js';
@@ -43,7 +43,7 @@ export type { DriftFinding } from './endpoint-drift-report.js';
  * `security-guardduty-triage.ts`/`governance-exemption-auditor.ts` read) is still SCANNED, but a
  * VPN/tunnel process found there is reported at `info` severity (informational — "here's what's
  * running, matches the documented exception") instead of `warning` (needs review) — an operator
- * scanning Discord should be able to tell "already known and sanctioned" apart from "new,
+ * scanning alert hub should be able to tell "already known and sanctioned" apart from "new,
  * unexplained" without opening the tag on every instance by hand.
  */
 
@@ -214,7 +214,7 @@ export async function handler(): Promise<{ ok: true; scanned: number; withDrift:
         },
       ],
     });
-    await postDiscordEmbeds([embed]);
+    await postAlertEmbeds([embed]);
   }
 
   return { ok: true, scanned: instances.length, withDrift: findings.length, unexplained: unexplained.length };

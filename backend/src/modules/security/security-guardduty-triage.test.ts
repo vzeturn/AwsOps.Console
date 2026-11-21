@@ -15,15 +15,15 @@ vi.mock('@aws-sdk/client-guardduty', () => ({
   ArchiveFindingsCommand: vi.fn().mockImplementation((input: unknown) => ({ __cmd: 'ArchiveFindings', input })),
 }));
 
-const postDiscordEmbedsMock = vi.fn();
-vi.mock('../alerting/discordWebhook.js', () => ({ postDiscordEmbeds: postDiscordEmbedsMock }));
+const postAlertEmbedsMock = vi.fn();
+vi.mock('../alerting/alertHook.js', () => ({ postAlertEmbeds: postAlertEmbedsMock }));
 
 const { handler } = await import('./security-guardduty-triage.js');
 
 beforeEach(() => {
   ec2SendMock.mockReset();
   guardDutySendMock.mockReset();
-  postDiscordEmbedsMock.mockReset();
+  postAlertEmbedsMock.mockReset();
 });
 
 function buildEvent(overrides: Partial<{ resourceType: string; instanceId: string }> = {}) {
@@ -56,7 +56,7 @@ describe('security-guardduty-triage handler', () => {
     expect(result).toEqual({ action: 'archived', exceptionTagValue: 'dual-vpn-tailscale-netbird-test' });
     const archiveCall = guardDutySendMock.mock.calls.find((c) => c[0].__cmd === 'ArchiveFindings');
     expect(archiveCall![0].input).toEqual({ DetectorId: 'detector-1', FindingIds: ['finding-1'] });
-    expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
+    expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
   });
 
   it('leaves the finding untouched when the instance has NO SecurityException tag', async () => {
@@ -66,7 +66,7 @@ describe('security-guardduty-triage handler', () => {
 
     expect(result).toEqual({ action: 'left-for-review' });
     expect(guardDutySendMock).not.toHaveBeenCalled();
-    expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+    expect(postAlertEmbedsMock).not.toHaveBeenCalled();
   });
 
   it('leaves the finding untouched when the resource is not an EC2 instance', async () => {
@@ -83,7 +83,7 @@ describe('security-guardduty-triage handler', () => {
     const result = await handler(buildEvent());
 
     expect(result).toEqual({ action: 'left-for-review', exceptionTagValue: 'x' });
-    expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+    expect(postAlertEmbedsMock).not.toHaveBeenCalled();
   });
 
   it('treats a tag lookup failure as "no exception found" (fail-safe), never auto-archives on an unverified assumption', async () => {

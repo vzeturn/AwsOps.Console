@@ -16,15 +16,15 @@ vi.mock('@aws-sdk/client-ssm', () => ({
   GetCommandInvocationCommand: vi.fn().mockImplementation((input: unknown) => ({ __cmd: 'GetCommandInvocation', input })),
 }));
 
-const postDiscordEmbedsMock = vi.fn();
-vi.mock('../alerting/discordWebhook.js', () => ({ postDiscordEmbeds: postDiscordEmbedsMock }));
+const postAlertEmbedsMock = vi.fn();
+vi.mock('../alerting/alertHook.js', () => ({ postAlertEmbeds: postAlertEmbedsMock }));
 
 const { handler, parseDetectedProcesses } = await import('./security-endpoint-drift-detector.js');
 
 beforeEach(() => {
   ec2SendMock.mockReset();
   ssmSendMock.mockReset();
-  postDiscordEmbedsMock.mockReset();
+  postAlertEmbedsMock.mockReset();
   vi.useRealTimers();
 });
 
@@ -66,8 +66,8 @@ describe('handler', () => {
     const result = await handler();
 
     expect(result).toEqual({ ok: true, scanned: 1, withDrift: 1, unexplained: 1 });
-    expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     expect(embed.color).toBe(0xfaa61a); // warning
     expect(JSON.stringify(embed)).toContain('NOT tagged as an exception');
   });
@@ -86,7 +86,7 @@ describe('handler', () => {
     const result = await handler();
 
     expect(result).toEqual({ ok: true, scanned: 1, withDrift: 1, unexplained: 0 });
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     expect(embed.color).toBe(0x5865f2); // info
     expect(JSON.stringify(embed)).toContain('sanctioned');
   });
@@ -103,7 +103,7 @@ describe('handler', () => {
     const result = await handler();
 
     expect(result).toEqual({ ok: true, scanned: 1, withDrift: 0, unexplained: 0 });
-    expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+    expect(postAlertEmbedsMock).not.toHaveBeenCalled();
   });
 
   it('skips an instance with no SSM agent online (nothing to scan)', async () => {
@@ -129,6 +129,6 @@ describe('handler', () => {
     const result = await handler();
 
     expect(result).toEqual({ ok: true, scanned: 1, withDrift: 0, unexplained: 0 });
-    expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+    expect(postAlertEmbedsMock).not.toHaveBeenCalled();
   });
 });

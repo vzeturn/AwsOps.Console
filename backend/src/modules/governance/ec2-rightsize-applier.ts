@@ -18,7 +18,7 @@ import { fetchEc2RecommendationDetail } from '../infra/compute-optimizer-collect
 // Lean_Lambda_Exception (Requirement 6.4a): direct imports, not `../alerting/index.js` — see the
 // exception comment in `agent/ai-ops-agent.ts` (same reason): `ec2-rightsize-applier-fn` is a
 // lean standalone Lambda.
-import { postDiscordEmbeds } from '../alerting/discordWebhook.js';
+import { postAlertEmbeds } from '../alerting/alertHook.js';
 import { buildOpsNotificationEmbed, type OpsNotificationSeverity } from '../alerting/opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 
@@ -98,7 +98,7 @@ interface ResolvedRightsizeTarget {
    * + no platformDifferences, see `pickSafeCrossFamilyRecommendation`). `'sameFamily'` when falling
    * back to increasing/decreasing one step within the CURRENT family (Compute Optimizer has no
    * "clean" recommendation, or no longer confirms this direction at apply time). Used to record
-   * clearly in the audit trail/Discord notification. */
+   * clearly in the audit trail/alert. */
   source: 'computeOptimizer' | 'sameFamily';
 }
 
@@ -153,7 +153,7 @@ async function resolveRightsizeTarget(
 
 function buildResultEmbed(params: {
   instanceId: string;
-  /** Display name shown in Discord (Name tag, falling back to instanceId if absent) — per the
+  /** Display name shown in alert hub (Name tag, falling back to instanceId if absent) — per the
    * requirement "should only use instance/resource names, not IDs, since they're hard to read". */
   displayName: string;
   direction: 'up' | 'down';
@@ -264,7 +264,7 @@ export async function handler(event: EventBridgeEvent<'EC2 Instance State-change
   } catch (err) {
     logger.error(`ec2-rightsize-applier: determining the target instance type failed for ${instanceId}`, err);
     await clearPendingTag();
-    await postDiscordEmbeds([
+    await postAlertEmbeds([
       buildResultEmbed({ instanceId, displayName, direction, outcome: 'failure', reason: `Could not read the size list for the family: ${(err as Error).message}` }),
     ]);
     return;
@@ -284,7 +284,7 @@ export async function handler(event: EventBridgeEvent<'EC2 Instance State-change
     logger.info(`ec2-rightsize-applier: ${instanceId} — ${reason}`);
     await clearPendingTag();
     await writeAuditRecordMinimal({ ...baseAudit, outcome: 'rejected', reason });
-    await postDiscordEmbeds([buildResultEmbed({ instanceId, displayName, direction, outcome: 'rejected', reason })]);
+    await postAlertEmbeds([buildResultEmbed({ instanceId, displayName, direction, outcome: 'rejected', reason })]);
     return;
   }
 
@@ -293,7 +293,7 @@ export async function handler(event: EventBridgeEvent<'EC2 Instance State-change
     logger.info(`ec2-rightsize-applier: ${instanceId} — ${reason}`);
     await clearPendingTag();
     await writeAuditRecordMinimal({ ...baseAudit, outcome: 'rejected', reason });
-    await postDiscordEmbeds([buildResultEmbed({ instanceId, displayName, direction, outcome: 'rejected', reason })]);
+    await postAlertEmbeds([buildResultEmbed({ instanceId, displayName, direction, outcome: 'rejected', reason })]);
     return;
   }
 
@@ -304,7 +304,7 @@ export async function handler(event: EventBridgeEvent<'EC2 Instance State-change
     logger.error(`ec2-rightsize-applier: ${reason}`);
     await clearPendingTag();
     await writeAuditRecordMinimal({ ...baseAudit, outcome: 'failure', reason });
-    await postDiscordEmbeds([buildResultEmbed({ instanceId, displayName, direction, outcome: 'failure', reason })]);
+    await postAlertEmbeds([buildResultEmbed({ instanceId, displayName, direction, outcome: 'failure', reason })]);
     return;
   }
 
@@ -325,7 +325,7 @@ export async function handler(event: EventBridgeEvent<'EC2 Instance State-change
     outcome: 'success',
     params: { direction, currentInstanceType, newInstanceType: target.instanceType, source: target.source },
   });
-  await postDiscordEmbeds([
+  await postAlertEmbeds([
     buildResultEmbed({ instanceId, displayName, direction, outcome: 'success', fromType: currentInstanceType, toType: target.instanceType, source: target.source }),
   ]);
 }

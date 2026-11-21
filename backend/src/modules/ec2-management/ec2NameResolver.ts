@@ -3,7 +3,7 @@ import { logger } from '../../shared-kernel/logger.js';
 
 /**
  * `ec2NameResolver.ts` — a SHARED "resolve an AWS resource id to its human Name tag" helper.
- * Extracted out of `discord-alarm-notifier.ts` (where this started as 2 private functions) so
+ * Extracted out of `alarm-notifier.ts` (where this started as 2 private functions) so
  * `health-report.ts` can show the SAME resolved name for the SAME `InstanceId` an operator would
  * already recognize from a CloudWatch Alarm notification — a notification that shows a bare
  * `i-0a1b2c3d4e5f60001` in one channel and a friendly name in another (for the exact same

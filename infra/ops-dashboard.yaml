@@ -121,15 +121,15 @@ Parameters:
         aws ssm put-parameter --name "<value of this parameter>" --type SecureString --value "<token>" --overwrite
       Each Lambda role that reads it gets ssm:GetParameter (WithDecryption) and kms:Decrypt
       (scoped with kms:ViaService=ssm, default aws/ssm key) on this parameter's ARN only.
-  DiscordWebhookUrlParamName:
+  AlertHookUrlParamName:
     Type: String
-    Default: '/abc/ops-dashboard/prod/discord-webhook-url'
+    Default: '/abc/ops-dashboard/prod/alert-hook-url'
     Description: >-
-      NAME (not the value) of an SSM SecureString parameter holding the Discord Incoming Webhook URL
-      (https://discord.com/api/webhooks/<id>/<token>), the only receiver of CloudWatch Alarm
-      notifications. See Ec2StateManagerServiceTokenParamName above for why only the name is declared.
+      NAME (not the value) of an SSM SecureString parameter holding the Request Tracking hub alert hook URL
+      (issued by the hub set_alert_hook for project ops-dashboard), the only receiver of every
+      warning/critical alert (info is logged only). See Ec2StateManagerServiceTokenParamName above for why only the name is declared.
       Create or update the parameter MANUALLY before deploying:
-        aws ssm put-parameter --name "<value of this parameter>" --type SecureString --value "<webhook url>" --overwrite
+        aws ssm put-parameter --name "<value of this parameter>" --type SecureString --value "<alert hook url>" --overwrite
       Each Lambda role that reads it gets ssm:GetParameter (WithDecryption) and kms:Decrypt
       (scoped with kms:ViaService=ssm) on this parameter's ARN only.
   AlarmBaselineScheduleExpression:
@@ -158,9 +158,9 @@ Parameters:
     Type: String
     Default: rate(15 minutes)
     Description: >-
-      How often health-report-fn posts a Discord embed summarizing overall system health
+      How often health-report-fn posts an alert embed summarizing overall system health
       (DescribeAlarms, free tier). Independent of the SNS state-change path of
-      discord-alarm-notifier-fn, so it can detect a missed message on that path.
+      alerting-notifier-fn, so it can detect a missed message on that path.
   PatchSchedulerScheduleExpression:
     Type: String
     Default: rate(10 minutes)
@@ -241,7 +241,7 @@ Parameters:
     Default: '/abc/ops-dashboard/prod/agent-claude-api-key'
     Description: >-
       NAME (not the value) of an SSM SecureString parameter holding the Anthropic API key
-      ("sk-ant-..."). Same pattern as DiscordWebhookUrlParamName/Ec2StateManagerServiceTokenParamName
+      ("sk-ant-..."). Same pattern as AlertHookUrlParamName/Ec2StateManagerServiceTokenParamName
       (all three declare the name only). CloudFormation cannot create SecureString SSM parameters,
       so this parameter only declares the NAME; the real key never passes through CloudFormation
       parameters or stack events (where it would be logged in plaintext in CloudTrail).
@@ -607,18 +607,18 @@ Resources:
                 Resource: '*'
 
   # NO AWS::SSM::Parameter resource for either the external state-manager service token or the
-  # Discord webhook URL: both are SecureString parameters, created/updated MANUALLY via
+  # alert hook URL: both are SecureString parameters, created/updated MANUALLY via
   # `aws ssm put-parameter --type SecureString` (see the Ec2StateManagerServiceTokenParamName /
-  # DiscordWebhookUrlParamName parameter descriptions above), following the same pattern as
+  # AlertHookUrlParamName parameter descriptions above), following the same pattern as
   # AgentClaudeApiKeyParamName. CloudFormation cannot create a SecureString parameter directly, and
   # passing the plaintext value through a CFN `String` parameter would expose it in CloudTrail and
   # stack events in plaintext.
   #
   # If an existing deployment still has `Type: String` parameters at
   # `/${Org}/${Project}/${Environment}/ec2-state-manager-service-token` and
-  # `/${Org}/${Project}/${Environment}/discord-webhook-url`, run the `put-parameter --overwrite`
+  # `/${Org}/${Project}/${Environment}/alert-hook-url`, run the `put-parameter --overwrite`
   # commands above BEFORE deploying this template. Every Lambda below reads with
-  # `WithDecryption: true` (see discordWebhook.ts/ec2-state-manager-client.ts), which works
+  # `WithDecryption: true` (see alertHook.ts/ec2-state-manager-client.ts), which works
   # against BOTH String and SecureString parameters, so there is no hard ordering requirement, but
   # an unconverted String parameter keeps the value unencrypted until it is converted manually.
 
@@ -639,8 +639,8 @@ Resources:
         - { Key: Owner, Value: platform }
 
   # --- SNS: the ONLY topic that receives AlarmActions/OKActions for the whole standard alarm set
-  # (managed by alarm-baseline-manager-fn). Its ONLY subscriber is discord-alarm-notifier-fn (a
-  # Lambda); there is no email subscriber (the Discord webhook replaces SNS email entirely). ---
+  # (managed by alarm-baseline-manager-fn). Its ONLY subscriber is alerting-notifier-fn (a
+  # Lambda); there is no email subscriber (the alert hook replaces SNS email entirely). ---
   #
   # OUT-OF-BAND RESOURCE NOTE: a second SNS topic (for example one named `<org>-security-alerts`)
   # may also deliver to `DiscordAlarmNotifierFunction` without being defined anywhere in this
@@ -650,7 +650,7 @@ Resources:
   # resources are not visible in `cfn drift-detection` against this template, are not torn down if
   # this stack is deleted, and are not reproduced by redeploying this template alone, which matters
   # when standing up a second environment/account. See `RUNBOOK_BY_METRIC`'s CIS section in
-  # `shared/src/runbookCatalog.ts` and `lookupCisBenchmarkEvent` in `discord-alarm-notifier.ts` for
+  # `shared/src/runbookCatalog.ts` and `lookupCisBenchmarkEvent` in `alarm-notifier.ts` for
   # how those alarms are enriched with a runbook although they live outside this template.
   # Bringing the CIS alarm pack under this IaC (as `AWS::CloudWatch::Alarm` +
   # `AWS::Logs::MetricFilter` resources) would close the gap.
@@ -658,16 +658,16 @@ Resources:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: !Sub '${Org}-${Project}-${Environment}-alarm-notifications'
-      DisplayName: 'ops-dashboard alarm notifications (-> Discord)'
+      DisplayName: 'ops-dashboard alarm notifications (-> alert hub)'
       Tags:
         - { Key: Environment, Value: !Ref Environment }
         - { Key: Project, Value: !Ref Project }
         - { Key: Lifecycle, Value: active }
         - { Key: Owner, Value: platform }
 
-  # --- IAM: discord-alarm-notifier-fn (SNS subscriber -> POST to the Discord webhook). Needs to
+  # --- IAM: alerting-notifier-fn (SNS subscriber -> POST to the alert hook). Needs to
   # read 1 SSM parameter (the secret webhook URL) and ec2:DescribeInstances (to look up the Name
-  # tag of the instance behind an alarm, so the Discord message shows the instance name next to
+  # tag of the instance behind an alarm, so the alert shows the instance name next to
   # the InstanceId). DescribeInstances does not support scoping to a specific Resource ARN (only
   # Resource: '*'), as in ec2-collector.ts. ---
   DiscordAlarmNotifierRole:
@@ -683,13 +683,13 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: discord-webhook-url-read
+        - PolicyName: alert-hook-url-read
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               # SecureString requires kms:Decrypt separately from ssm:GetParameter, scoped via
               # kms:ViaService (not a specific key Resource ARN - the AWS-managed `alias/aws/ssm`
               # key's real ARN is account-specific, same rationale as AiOpsAgentRole's
@@ -701,20 +701,20 @@ Resources:
                 Condition:
                   StringEquals:
                     kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
-        - PolicyName: discord-alarm-ec2-name-lookup
+        - PolicyName: alarm-notifier-ec2-name-lookup
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ec2:DescribeInstances
                 Resource: '*'
-        # CIS Benchmark alarm enrichment (lookupCisBenchmarkEvent in discord-alarm-notifier.ts):
+        # CIS Benchmark alarm enrichment (lookupCisBenchmarkEvent in alarm-notifier.ts):
         # re-queries CloudTrail for the specific API call/principal/IP/resource behind a
         # `CIS-*-Alarm` (namespace CISBenchmark) metric-filter count, which otherwise carries no
         # Dimensions at all. cloudtrail:LookupEvents does NOT support resource-level restriction
         # (same API-limitation pattern as ec2:DescribeInstances above - AWS-documented, not a
         # choice made here) - read-only, no write/delete action on the trail itself.
-        - PolicyName: discord-alarm-cloudtrail-lookup
+        - PolicyName: alarm-notifier-cloudtrail-lookup
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -732,10 +732,10 @@ Resources:
       Timeout: 15
       MemorySize: 128
       Role: !GetAtt DiscordAlarmNotifierRole.Arn
-      Code: ./build/discord-alarm-notifier
+      Code: ./build/alarm-notifier
       Environment:
         Variables:
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
       Tags:
         - { Key: Environment, Value: !Ref Environment }
         - { Key: Project, Value: !Ref Project }
@@ -764,7 +764,7 @@ Resources:
       Endpoint: !GetAtt DiscordAlarmNotifierFunction.Arn
 
   # --- RDS event subscription -> the SAME topic the alarms already use, so RDS's own events reach
-  # Discord through the notifier that is already wired up.
+  # alert hub through the notifier that is already wired up.
   #
   # WHY THIS EXISTS. A CloudWatch alarm can only see a METRIC. A whole class of RDS problems is not a
   # metric at all: it is an event. Without an event subscription, messages such as
@@ -826,13 +826,13 @@ Resources:
   # (EventBridge custom-bus rule matches and SNS publishes to an existing topic are pennies/month).
 
   # --- EventBridge Rule: forwards GuardDuty findings to the SAME AlarmNotificationTopic every
-  # other alarm/RDS event already uses, so discord-alarm-notifier-fn (already wired up, already
-  # gates VS a single Discord channel) delivers these too, with NO new Lambda/topic/subscriber.
+  # other alarm/RDS event already uses, so alerting-notifier-fn (already wired up, already
+  # gates VS a single the alert hub) delivers these too, with NO new Lambda/topic/subscriber.
   #
   # SEVERITY FILTER (severity >= 4, i.e. Medium and above): GuardDuty severity is a float from 0.1
   # to 8.9. Low-severity findings (<4) are frequently reconnaissance noise (a single port probe, a
   # benign anomaly) that GuardDuty itself documents as "informational" - forwarding EVERY finding
-  # regardless of severity would flood the Discord channel exactly the way this project already
+  # regardless of severity would flood the alert hub exactly the way this project already
   # had to guard against once for ECS autoscaling noise (isAutoscalingScaleInNoise) and RDS
   # `availability` events (see the comment on RdsEventSubscription above). Medium+ is the
   # threshold GuardDuty's own console highlights as needing a human look.
@@ -842,7 +842,7 @@ Resources:
       Name: !Sub '${Org}-${Project}-${Environment}-guardduty-findings'
       Description: >-
         Forwards GuardDuty findings with severity >= 4 (Medium/High) to AlarmNotificationTopic ->
-        discord-alarm-notifier-fn. Low-severity (<4) findings are not forwarded, to avoid alert
+        alerting-notifier-fn. Low-severity (<4) findings are not forwarded, to avoid alert
         fatigue on reconnaissance-level noise.
       EventPattern:
         source: [aws.guardduty]
@@ -1007,13 +1007,13 @@ Resources:
                   # permanent INSUFFICIENT_DATA alarm, the very problem this standard set avoids.
                   - cloudwatch:ListMetrics
                 Resource: '*'
-        - PolicyName: alarm-baseline-manager-discord-webhook
+        - PolicyName: alarm-baseline-manager-alert-hook
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               # SecureString requires kms:Decrypt separately from ssm:GetParameter, scoped via
               # kms:ViaService (not a specific key Resource ARN - the AWS-managed `alias/aws/ssm`
               # key's real ARN is account-specific, same rationale as AiOpsAgentRole's
@@ -1040,7 +1040,7 @@ Resources:
       Environment:
         Variables:
           ALARM_NOTIFICATION_TOPIC_ARN: !Ref AlarmNotificationTopic
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
           ALARM_BASELINE_EXCLUDED_RESOURCES: !Ref AlarmBaselineExcludedResources
       Tags:
         - { Key: Environment, Value: !Ref Environment }
@@ -1116,11 +1116,11 @@ Resources:
         DeadLetterConfig:
           Arn: !GetAtt SchedulerDeadLetterQueue.Arn
 
-  # --- IAM: health-report-fn (posts a Discord embed summarizing system health every 15 minutes,
+  # --- IAM: health-report-fn (posts an alert embed summarizing system health every 15 minutes,
   # independent of the SNS path). Needs only cloudwatch:DescribeAlarms (reads existing alarm state;
   # NO Put/DeleteAlarms, unlike AlarmBaselineManagerRole, because this Lambda does not manage
-  # alarms), ssm:GetParameter on DiscordWebhookUrlParameter (posts to Discord through
-  # discordWebhook.ts, same parameter as discord-alarm-notifier-fn/alarm-baseline-manager-fn) and
+  # alarms), ssm:GetParameter on AlertHookUrlParameter (posts to alert hub through
+  # alertHook.ts, same parameter as alerting-notifier-fn/alarm-baseline-manager-fn) and
   # ec2:DescribeInstances (looks up the Name tag of EC2 instances behind alarms, same reason and
   # permission as DiscordAlarmNotifierRole above, so the same InstanceId shows the same name in
   # both notification channels). ---
@@ -1144,13 +1144,13 @@ Resources:
               - Effect: Allow
                 Action: cloudwatch:DescribeAlarms
                 Resource: '*'
-        - PolicyName: health-report-discord-webhook
+        - PolicyName: health-report-alert-hook
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               # SecureString requires kms:Decrypt separately from ssm:GetParameter, scoped via
               # kms:ViaService (not a specific key Resource ARN - the AWS-managed `alias/aws/ssm`
               # key's real ARN is account-specific, same rationale as AiOpsAgentRole's
@@ -1183,7 +1183,7 @@ Resources:
       Code: ./build/health-report
       Environment:
         Variables:
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
           # ASSESSMENT_BUCKET_NAME is REQUIRED here even though this Lambda does not use it
           # directly: health-report imports a module that transitively pulls in
           # threshold-history-service.ts, which reads ASSESSMENT_BUCKET_NAME at module scope and
@@ -1255,7 +1255,7 @@ Resources:
     Type: AWS::Scheduler::Schedule
     Properties:
       Name: !Sub '${Org}-${Project}-${Environment}-alerting-health-report'
-      Description: Post a Discord embed summarizing system health every 15 minutes (see HealthReportScheduleExpression).
+      Description: Log a system health summary every 15 minutes (log-only, RT-0490) (see HealthReportScheduleExpression).
       FlexibleTimeWindow: { Mode: 'OFF' }
       ScheduleExpression: !Ref HealthReportScheduleExpression
       State: ENABLED
@@ -1323,13 +1323,13 @@ Resources:
                 # reference, unlike SendCommand.
                 Action: ssm:GetCommandInvocation
                 Resource: '*'
-        - PolicyName: patch-scheduler-discord-webhook
+        - PolicyName: patch-scheduler-alert-hook
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               # SecureString requires kms:Decrypt separately from ssm:GetParameter, scoped via
               # kms:ViaService (not a specific key Resource ARN - the AWS-managed `alias/aws/ssm`
               # key's real ARN is account-specific, same rationale as AiOpsAgentRole's
@@ -1363,7 +1363,7 @@ Resources:
           TAG_PREFIX: !Ref TagPrefix
           SCHEDULE_TAG_KEY: !Ref ScheduleTagKey
           PATCH_TIMEZONE: !Ref PatchTimezone
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
       Tags:
         - { Key: Environment, Value: !Ref Environment }
         - { Key: Project, Value: !Ref Project }
@@ -1443,7 +1443,7 @@ Resources:
   # Instance State-change Notification" (an event-driven Lambda, not an EventBridge Scheduler
   # one). Least privilege: read instance/family sizes (Describe*), change InstanceType
   # (ModifyInstanceAttribute, scoped to instance/*), read/delete/write only this mechanism's 2
-  # tags (scoped with a TagKeys condition), read the Discord webhook (ssm:GetParameter), write the
+  # tags (scoped with a TagKeys condition), read the alert hook (ssm:GetParameter), write the
   # audit trail (s3:PutObject scoped to the action-audit/* prefix, same bucket/prefix as
   # action-audit-service.ts but with its own S3Client, see the comment in
   # ec2-rightsize-applier.ts for why it does NOT import config.ts). ---
@@ -1490,7 +1490,7 @@ Resources:
                 Resource: '*'
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               # SecureString requires kms:Decrypt separately from ssm:GetParameter, scoped via
               # kms:ViaService (not a specific key Resource ARN - the AWS-managed `alias/aws/ssm`
               # key's real ARN is account-specific, same rationale as AiOpsAgentRole's
@@ -1520,7 +1520,7 @@ Resources:
       Environment:
         Variables:
           ASSESSMENT_BUCKET_NAME: !Ref AssessmentReportBucket
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
           AWS_ACCOUNT_ID: !Ref AWS::AccountId
           # See the comment on PatchSchedulerFunction about the required consistency across Lambdas.
           TAG_PREFIX: !Ref TagPrefix
@@ -1591,7 +1591,7 @@ Resources:
                 Resource: '*'
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               # SecureString requires kms:Decrypt separately from ssm:GetParameter, scoped via
               # kms:ViaService (not a specific key Resource ARN - the AWS-managed `alias/aws/ssm`
               # key's real ARN is account-specific, same rationale as AiOpsAgentRole's
@@ -1641,7 +1641,7 @@ Resources:
       Code: ./build/downsize-scheduler
       Environment:
         Variables:
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
       Tags:
         - { Key: Environment, Value: !Ref Environment }
         - { Key: Project, Value: !Ref Project }
@@ -1679,7 +1679,7 @@ Resources:
   # DownsizeSchedulerFunction before/after peak hours). Least privilege: read instances
   # (DescribeInstances, DescribeInstanceTypes to check CPU architecture compatibility), READ-ONLY S3
   # scoped to the timeofday-schedule/* prefix (this function never rewrites the schedule), invoke
-  # ONLY DownsizeSchedulerFunction (scoped ARN), read the Discord webhook. ---
+  # ONLY DownsizeSchedulerFunction (scoped ARN), read the alert hook. ---
   TimeOfDayTriggerRole:
     Type: AWS::IAM::Role
     Properties:
@@ -1712,7 +1712,7 @@ Resources:
                 Resource: !GetAtt DownsizeSchedulerFunction.Arn
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               # SecureString requires kms:Decrypt separately from ssm:GetParameter, scoped via
               # kms:ViaService (not a specific key Resource ARN - the AWS-managed `alias/aws/ssm`
               # key's real ARN is account-specific, same rationale as AiOpsAgentRole's
@@ -1739,7 +1739,7 @@ Resources:
       Environment:
         Variables:
           ASSESSMENT_BUCKET_NAME: !Ref AssessmentReportBucket
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
           DOWNSIZE_SCHEDULER_FUNCTION_ARN: !GetAtt DownsizeSchedulerFunction.Arn
           # AWS_ACCOUNT_ID is REQUIRED here: without it this Lambda fails in its module initializer
           # on EVERY invocation ("Missing required environment variable: AWS_ACCOUNT_ID"), and the
@@ -1851,7 +1851,7 @@ Resources:
   #    (rate-limit.json, see lib/agentRateLimiter.ts). No access to any other object in the bucket,
   #    and NEVER s3:PutObject on action-audit/* (the audit trail is written only by
   #    action-execution-fn, never directly by this Lambda).
-  #  - ssm:GetParameter ONLY on the 2 required parameters (kill switch + Discord webhook), no Put*.
+  #  - ssm:GetParameter ONLY on the 2 required parameters (kill switch + alert hook), no Put*.
   #  - lambda:InvokeFunction SCOPED to exactly 1 ARN, ActionExecutionFunction. This is the most
   #    important boundary of the feature: this role has NO permission of its own to mutate any AWS
   #    resource (no ec2:*, rds:*, s3:PutLifecycleConfiguration...). EVERY real infrastructure
@@ -1914,8 +1914,8 @@ Resources:
                 Action: ssm:GetParameter
                 Resource:
                   - !GetAtt AiOpsAgentKillSwitchParameter.Arn
-                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
-              # DiscordWebhookUrlParamName is a SecureString, so kms:Decrypt is needed separately,
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
+              # AlertHookUrlParamName is a SecureString, so kms:Decrypt is needed separately,
               # scoped via kms:ViaService (see DecryptClaudeApiKeyViaSsmOnly above for the same
               # pattern/rationale). AiOpsAgentKillSwitchParameter stays plain String (a boolean
               # flag, not a secret), so no kms:Decrypt is needed for that one.
@@ -1950,7 +1950,7 @@ Resources:
           ASSESSMENT_BUCKET_NAME: !Ref AssessmentReportBucket
           ACTION_EXECUTION_FUNCTION_NAME: !Ref ActionExecutionFunction
           AGENT_KILL_SWITCH_PARAM_NAME: !Ref AiOpsAgentKillSwitchParameter
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
           AGENT_CLAUDE_MODEL_ID: !Ref AgentClaudeModelId
           AGENT_CLAUDE_API_KEY_PARAM_NAME: !Ref AgentClaudeApiKeyParamName
       Tags:
@@ -2778,13 +2778,13 @@ Resources:
                 Effect: Allow
                 Action: [rds:DescribeDBInstances, rds:StopDBInstance]
                 Resource: !Sub 'arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:db:*'
-        - PolicyName: idle-scheduler-tick-discord-webhook
+        - PolicyName: idle-scheduler-tick-alert-hook
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: '*'
@@ -2809,7 +2809,7 @@ Resources:
       Code: ./build/idle-scheduler-tick
       Environment:
         Variables:
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
       Tags:
         - { Key: Environment, Value: !Ref Environment }
         - { Key: Project, Value: !Ref Project }
@@ -2926,13 +2926,13 @@ Resources:
                 Effect: Allow
                 Action: [rds:DescribeDBInstances, rds:StartDBInstance]
                 Resource: !Sub 'arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:db:*'
-        - PolicyName: idle-scheduler-wake-discord-webhook
+        - PolicyName: idle-scheduler-wake-alert-hook
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: '*'
@@ -2956,7 +2956,7 @@ Resources:
       Code: ./build/idle-scheduler-wake
       Environment:
         Variables:
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
       Tags:
         - { Key: Environment, Value: !Ref Environment }
         - { Key: Project, Value: !Ref Project }
@@ -3050,13 +3050,13 @@ Resources:
                 # ActionsEnabled back on, never force an alarm's state directly.
                 Action: [cloudwatch:DescribeAlarms, cloudwatch:EnableAlarmActions, cloudwatch:PutMetricData]
                 Resource: '*'
-        - PolicyName: idle-scheduler-watchdog-discord-webhook
+        - PolicyName: idle-scheduler-watchdog-alert-hook
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: '*'
@@ -3082,7 +3082,7 @@ Resources:
       Code: ./build/idle-scheduler-watchdog
       Environment:
         Variables:
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
           IDLE_SCHEDULER_TICK_SCHEDULE_NAME: !Sub '${Org}-${Project}-${Environment}-idle-scheduler-tick'
           IDLE_SCHEDULER_SCHEDULE_GROUP: default
           IDLE_SCHEDULER_TICK_FUNCTION_NAME: !Ref IdleSchedulerTickFunction
@@ -3297,13 +3297,13 @@ Resources:
               - Effect: Allow
                 Action: [rds:DescribeDBInstances, rds:ListTagsForResource, rds:StopDBInstance, rds:StartDBInstance]
                 Resource: !Sub 'arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:db:*'
-        - PolicyName: rds-nightly-scheduler-discord-webhook
+        - PolicyName: rds-nightly-scheduler-alert-hook
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: '*'
@@ -3328,7 +3328,7 @@ Resources:
       Code: ./build/rds-nightly-scheduler
       Environment:
         Variables:
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
       Tags:
         - { Key: Environment, Value: !Ref Environment }
         - { Key: Project, Value: !Ref Project }
@@ -3631,12 +3631,12 @@ Resources:
                   - s3:GetObject
                   - s3:PutObject
                 Resource: !Sub '${AssessmentReportBucket.Arn}/cost-cache.json'
-              # Cost threshold worsened -> proactive Discord notification (see
+              # Cost threshold worsened -> proactive alert (see
               # `shouldNotifyCostThresholdWorsened` in cost-collector.ts). Read-only, shares the
-              # existing SSM Parameter of discord-alarm-notifier-fn (DiscordWebhookUrlParameter).
+              # existing SSM Parameter of alerting-notifier-fn (AlertHookUrlParameter).
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               # SecureString requires kms:Decrypt separately from ssm:GetParameter, scoped via
               # kms:ViaService (not a specific key Resource ARN - the AWS-managed `alias/aws/ssm`
               # key's real ARN is account-specific, same rationale as AiOpsAgentRole's
@@ -3663,7 +3663,7 @@ Resources:
       Environment:
         Variables:
           ASSESSMENT_BUCKET_NAME: !Ref AssessmentReportBucket
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
           AWS_ACCOUNT_ID: !Ref AWS::AccountId
       Tags:
         - { Key: Environment, Value: !Ref Environment }
@@ -4034,7 +4034,7 @@ Resources:
                   # backend/src/modules/governance/s3PolicyStore.ts.
                   - !Sub '${AssessmentReportBucket.Arn}/timeofday-schedule/*'
               # Reads the report of the PREVIOUS run to diff and find NEW high-priority findings (see
-              # `readPreviousRecommendations` in infra-review-collector.ts), for proactive Discord
+              # `readPreviousRecommendations` in infra-review-collector.ts), for proactive alert hub
               # notification. Same object as the PutObject above, only a different action.
               #
               # This role also re-reads the previous schedule through s3PolicyStore.getComputedSchedule:
@@ -4047,11 +4047,11 @@ Resources:
                 Resource:
                   - !Sub '${AssessmentReportBucket.Arn}/assessment-report.json'
                   - !Sub '${AssessmentReportBucket.Arn}/timeofday-schedule/*'
-              # NEW high-priority finding -> proactive Discord notification. Read-only, shares the
-              # existing SSM Parameter of discord-alarm-notifier-fn (DiscordWebhookUrlParameter).
+              # NEW high-priority finding -> proactive alert. Read-only, shares the
+              # existing SSM Parameter of alerting-notifier-fn (AlertHookUrlParameter).
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               # SecureString requires kms:Decrypt separately from ssm:GetParameter, scoped via
               # kms:ViaService (not a specific key Resource ARN - the AWS-managed `alias/aws/ssm`
               # key's real ARN is account-specific, same rationale as AiOpsAgentRole's
@@ -4090,7 +4090,7 @@ Resources:
       Environment:
         Variables:
           ASSESSMENT_BUCKET_NAME: !Ref AssessmentReportBucket
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
           AWS_ACCOUNT_ID: !Ref AWS::AccountId
           # See the comment on PatchSchedulerFunction about the required consistency across Lambdas.
           TAG_PREFIX: !Ref TagPrefix
@@ -4199,7 +4199,7 @@ Resources:
   # ================================================================================================
   # 5 self-healing automation Lambdas (see RUNBOOK.md section 5 for the rationale). Each turns a
   # one-time manual finding/fix into a recurring, automatic check, posting through the SAME
-  # AlarmNotificationTopic -> alerting-notifier-fn -> Discord path every other alarm in this stack
+  # AlarmNotificationTopic -> alerting-notifier-fn -> alert hub path every other alarm in this stack
   # already uses, so no new notification channel is added.
 
   # --- IAM: alerting-topic-guardian-fn (rate(1 day): every SNS topic used for alerting must have
@@ -4228,13 +4228,13 @@ Resources:
               - Effect: Allow
                 Action: [sns:ListTopics, sns:ListSubscriptionsByTopic]
                 Resource: '*'
-        - PolicyName: topic-guardian-discord-webhook
+        - PolicyName: topic-guardian-alert-hook
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: '*'
@@ -4255,7 +4255,7 @@ Resources:
       Code: ./build/alerting-topic-guardian
       Environment:
         Variables:
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
       Tags:
         - { Key: Environment, Value: !Ref Environment }
         - { Key: Project, Value: !Ref Project }
@@ -4359,13 +4359,13 @@ Resources:
               - Effect: Allow
                 Action: [guardduty:ListDetectors, guardduty:ArchiveFindings]
                 Resource: '*'
-        - PolicyName: guardduty-triage-discord-webhook
+        - PolicyName: guardduty-triage-alert-hook
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: '*'
@@ -4386,7 +4386,7 @@ Resources:
       Code: ./build/security-guardduty-triage
       Environment:
         Variables:
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
       Tags:
         - { Key: Environment, Value: !Ref Environment }
         - { Key: Project, Value: !Ref Project }
@@ -4421,7 +4421,7 @@ Resources:
         - !Ref AlarmNotificationTopic
 
   # Second target on the SAME rule that already forwards to AlarmNotificationTopic — findings still
-  # reach Discord via the existing target regardless of what this Lambda decides; this is a parallel
+  # reach alert hub via the existing target regardless of what this Lambda decides; this is a parallel
   # observer, not a replacement for that forwarding path.
   GuardDutyFindingsRuleTriageTarget:
     Type: AWS::Events::Rule
@@ -4474,13 +4474,13 @@ Resources:
               - Effect: Allow
                 Action: [s3:GetBucketPolicyStatus, s3:GetBucketTagging]
                 Resource: 'arn:aws:s3:::*'
-        - PolicyName: public-bucket-guardian-discord-webhook
+        - PolicyName: public-bucket-guardian-alert-hook
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: '*'
@@ -4501,7 +4501,7 @@ Resources:
       Code: ./build/security-public-bucket-guardian
       Environment:
         Variables:
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
       Tags:
         - { Key: Environment, Value: !Ref Environment }
         - { Key: Project, Value: !Ref Project }
@@ -4603,13 +4603,13 @@ Resources:
               - Effect: Allow
                 Action: [elasticloadbalancing:DescribeLoadBalancers, elasticloadbalancing:DescribeTags]
                 Resource: '*'
-        - PolicyName: exemption-auditor-discord-webhook
+        - PolicyName: exemption-auditor-alert-hook
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: '*'
@@ -4630,7 +4630,7 @@ Resources:
       Code: ./build/governance-exemption-auditor
       Environment:
         Variables:
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
       Tags:
         - { Key: Environment, Value: !Ref Environment }
         - { Key: Project, Value: !Ref Project }
@@ -4742,13 +4742,13 @@ Resources:
               - Effect: Allow
                 Action: ssm:GetCommandInvocation
                 Resource: '*'
-        - PolicyName: endpoint-drift-discord-webhook
+        - PolicyName: endpoint-drift-alert-hook
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DiscordWebhookUrlParamName}'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AlertHookUrlParamName}'
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: '*'
@@ -4769,7 +4769,7 @@ Resources:
       Code: ./build/security-endpoint-drift-detector
       Environment:
         Variables:
-          DISCORD_WEBHOOK_URL_PARAM_NAME: !Ref DiscordWebhookUrlParamName
+          ALERT_HOOK_URL_PARAM_NAME: !Ref AlertHookUrlParamName
       Tags:
         - { Key: Environment, Value: !Ref Environment }
         - { Key: Project, Value: !Ref Project }

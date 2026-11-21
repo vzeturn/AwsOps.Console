@@ -10,7 +10,7 @@ const lambdaSendMock = vi.fn();
 const isAgentAutoExecuteEnabledMock = vi.fn();
 const reserveAgentExecutionBudgetMock = vi.fn();
 const decideAgentActionsMock = vi.fn();
-const postDiscordEmbedsMock = vi.fn();
+const postAlertEmbedsMock = vi.fn();
 
 vi.mock('@aws-sdk/client-s3', () => ({
   S3Client: vi.fn().mockImplementation(() => ({ send: s3SendMock })),
@@ -34,8 +34,8 @@ vi.mock('./agentClaudeDecision.js', () => ({
   decideAgentActions: decideAgentActionsMock,
 }));
 
-vi.mock('../alerting/discordWebhook.js', () => ({
-  postDiscordEmbeds: postDiscordEmbedsMock,
+vi.mock('../alerting/alertHook.js', () => ({
+  postAlertEmbeds: postAlertEmbedsMock,
 }));
 
 const { handler, findEligibleFindings } = await import('./ai-ops-agent.js');
@@ -84,8 +84,8 @@ beforeEach(() => {
   isAgentAutoExecuteEnabledMock.mockReset();
   reserveAgentExecutionBudgetMock.mockReset();
   decideAgentActionsMock.mockReset();
-  postDiscordEmbedsMock.mockReset();
-  postDiscordEmbedsMock.mockResolvedValue(undefined);
+  postAlertEmbedsMock.mockReset();
+  postAlertEmbedsMock.mockResolvedValue(undefined);
 });
 
 describe('findEligibleFindings (pure)', () => {
@@ -175,7 +175,7 @@ describe('handler (integration)', () => {
     expect(lambdaSendMock).not.toHaveBeenCalled();
   });
 
-  it('happy path: eligible finding selected by the model -> invokes action-execution-fn and posts one Discord embed', async () => {
+  it('happy path: eligible finding selected by the model -> invokes action-execution-fn and posts one alert embed', async () => {
     isAgentAutoExecuteEnabledMock.mockResolvedValue(true);
     s3SendMock.mockResolvedValue({
       Body: jsonBody(baseReport([recommendation({ findingType: 'ebsVolumeGp2ShouldBeGp3', resourceId: 'vol-123' })])),
@@ -198,17 +198,17 @@ describe('handler (integration)', () => {
       params: {},
       executedBy: 'agent:ops-ai-agent',
     });
-    expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
+    expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
 
     // Requirement: cite the runbook's rollback step in the notification itself, since nobody
     // confirmed this action by hand — this may be the first time an operator learns it happened.
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     const field = embed.fields.find((f: { name: string }) => f.name.includes('EBS_ModifyVolumeType'));
     expect(field.value).toContain('Rollback:');
     expect(field.value).toContain('ModifyVolume back to gp2');
   });
 
-  it('Bedrock selects nothing -> no execution, no Discord notification', async () => {
+  it('Bedrock selects nothing -> no execution, no alert', async () => {
     isAgentAutoExecuteEnabledMock.mockResolvedValue(true);
     s3SendMock.mockResolvedValue({ Body: jsonBody(baseReport([recommendation({ findingType: 'ebsVolumeGp2ShouldBeGp3' })])) });
     reserveAgentExecutionBudgetMock.mockResolvedValue({ allowedCount: 1, budgetRemainingAfter: 4 });
@@ -218,7 +218,7 @@ describe('handler (integration)', () => {
 
     expect(result).toEqual({ ok: true, eligibleCount: 1, selectedCount: 0, executedCount: 0, succeededCount: 0 });
     expect(lambdaSendMock).not.toHaveBeenCalled();
-    expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+    expect(postAlertEmbedsMock).not.toHaveBeenCalled();
   });
 
   it('SECURITY: a selected candidateId that does not resolve to a known finding is skipped, never invoked', async () => {
@@ -243,8 +243,8 @@ describe('handler (integration)', () => {
     const result = await handler();
 
     expect(result).toEqual({ ok: true, eligibleCount: 1, selectedCount: 1, executedCount: 1, succeededCount: 0 });
-    expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
-    const embed = postDiscordEmbedsMock.mock.calls[0][0][0];
+    expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
+    const embed = postAlertEmbedsMock.mock.calls[0][0][0];
     expect(embed.title).toContain('0/1');
     // A failed execution changed nothing, so there is nothing to roll back — must not claim one.
     const field = embed.fields.find((f: { name: string }) => f.name.includes('EBS_ModifyVolumeType'));

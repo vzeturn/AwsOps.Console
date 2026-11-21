@@ -114,7 +114,7 @@ export function buildMonthlyCostSummaries(entries: RawMonthlyCostEntry[]): Month
 }
 
 // ---- Diffs cost-optimization findings between 2 infra-review-collector runs — used for a
-// proactive Discord notify when a NEW 'high' priority finding shows up (requirement: "cost
+// proactive alert hub notify when a NEW 'high' priority finding shows up (requirement: "cost
 // optimization needs to be rolled out effectively and quickly, with continuous evaluation and
 // improvement, to avoid unnecessary cost" — the operator shouldn't have to check the Assessment
 // tab every day to find out about a new issue). ----
@@ -129,9 +129,9 @@ export function isNewFinding(item: RecommendationItem, previousItems: Recommenda
 }
 
 /** List of `priority === 'high'` findings present in `currentItems` but NOT in `previousItems` —
- * this is the set of findings "new enough to report right away" for a Discord notify. A lower
+ * this is the set of findings "new enough to report right away" for an alert hub notify. A lower
  * priority finding, even if new, is NOT worth interrupting via the proactive channel (still shown
- * in full on the dashboard, just no push notification) — avoids spamming Discord with non-urgent
+ * in full on the dashboard, just no push notification) — avoids spamming alert hub with non-urgent
  * findings. Pure function. */
 export function findNewHighPriorityFindings(
   currentItems: RecommendationItem[],
@@ -141,7 +141,7 @@ export function findNewHighPriorityFindings(
 }
 
 /** Sum of `estimatedMonthlySavingsUsd` (ignoring `null`) across a list of findings — used to
- * compute the "total estimated savings pending action" for the Discord notify content. Pure
+ * compute the "total estimated savings pending action" for the alert hub notify content. Pure
  * function. */
 export function sumEstimatedMonthlySavings(items: RecommendationItem[]): number {
   return items.reduce((sum, item) => sum + (item.estimatedMonthlySavingsUsd ?? 0), 0);

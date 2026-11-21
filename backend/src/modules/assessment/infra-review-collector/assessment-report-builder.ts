@@ -26,7 +26,7 @@ import { collectSavingsPlansCoverage } from '../../cost/savings-plans-collector.
 // re-exports `getAlerts`, which pulls in `threshold-history-service.ts` (needs
 // `ASSESSMENT_BUCKET_NAME`, which this Lambda IS granted, but only incidentally — the point is
 // not to depend on the whole monitoring stack).
-import { postDiscordEmbeds } from '../../alerting/discordWebhook.js';
+import { postAlertEmbeds } from '../../alerting/alertHook.js';
 import { logger } from '../../../shared-kernel/logger.js';
 import { collectHourlyMetrics } from '../../../collectors/time-of-day-collector.js';
 // Lean_Lambda_Exception (Requirement 6.4a): direct import, not `../../compliance/index.js`.
@@ -83,7 +83,7 @@ import {
   isoDateDaysAgo,
 } from './assessment-config.js';
 import { readPreviousRecommendations } from './previous-report.js';
-import { buildNewFindingsEmbed, buildAutoRightsizeQueuedEmbed } from './discord-embeds.js';
+import { buildNewFindingsEmbed, buildAutoRightsizeQueuedEmbed } from './alert-embeds.js';
 import { decideRightsizing, applyAutoRightsizeTagChanges } from './rightsize-decision.js';
 import { s3, ec2, cloudwatch, ASSESSMENT_BUCKET_NAME, AWS_ACCOUNT_ID } from './clients.js';
 
@@ -201,7 +201,7 @@ export async function handler(): Promise<{ ok: true }> {
   );
   const { setPending: newlyQueuedAutoRightsize } = await applyAutoRightsizeTagChanges(autoRightsizeChanges);
   if (newlyQueuedAutoRightsize.length > 0) {
-    await postDiscordEmbeds([buildAutoRightsizeQueuedEmbed(newlyQueuedAutoRightsize)]);
+    await postAlertEmbeds([buildAutoRightsizeQueuedEmbed(newlyQueuedAutoRightsize)]);
   }
 
   // ---- Time-of-Day Sizing: only fills the gap when Compute Optimizer has NO opinion (coDirection
@@ -721,13 +721,13 @@ export async function handler(): Promise<{ ok: true }> {
     `infra-review-collector: wrote assessment-report.json (${payloadBytes} bytes, ${sortedRecommendations.length} recommendations, ${protectionGaps.length} protection gaps)`,
   );
 
-  // Proactively notify Discord when a NEW 'high' priority finding has appeared compared to the
+  // Proactively notify alert hub when a NEW 'high' priority finding has appeared compared to the
   // previous run (see the comment on `buildNewFindingsEmbed`/`modules/cost/costReporting.ts`) — does NOT
-  // throw/block the handler's result if sending fails (postDiscordEmbeds wraps its own errors internally).
+  // throw/block the handler's result if sending fails (postAlertEmbeds wraps its own errors internally).
   const previousRecommendations = await previousRecommendationsPromise;
   const newHighPriorityFindings = findNewHighPriorityFindings(sortedRecommendations, previousRecommendations);
   if (newHighPriorityFindings.length > 0) {
-    await postDiscordEmbeds([buildNewFindingsEmbed(newHighPriorityFindings)]);
+    await postAlertEmbeds([buildNewFindingsEmbed(newHighPriorityFindings)]);
   }
 
   return { ok: true };

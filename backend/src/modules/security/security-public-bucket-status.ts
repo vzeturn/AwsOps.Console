@@ -4,7 +4,7 @@ import { logger } from '../../shared-kernel/logger.js';
 
 /**
  * Public-exposure status of every bucket. Extracted from security-public-bucket-guardian.ts so the
- * findings-aggregator can reuse it WITHOUT pulling in Discord/opsNotification. See the guardian's
+ * findings-aggregator can reuse it WITHOUT pulling in alert hub/opsNotification. See the guardian's
  * header for why `IsPublic` + the `DataClass=public` tag convention is the rule.
  */
 

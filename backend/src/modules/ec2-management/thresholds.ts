@@ -49,7 +49,7 @@ export function stateThreshold(state: string, badStates: string[], warnStates: s
  * displays for the tagged resource. A resource excluded here that DOES need a real CloudWatch
  * alarm should still get one via `alarm-baseline-manager`'s own
  * `ALARM_BASELINE_EXCLUDED_RESOURCES` (a deliberately separate exclusion list, since "hide from
- * this one dashboard tile" and "stop paging Discord" are different decisions).
+ * this one dashboard tile" and "stop paging alert hub" are different decisions).
  */
 // RENAMED to PascalCase 2026-10-08 (tag-standard rollout) — was 'ops-dashboard:monitoring-exempt'.
 // Deliberately a separate literal, not `${TAG_PREFIX}:monitoring-exempt` (this module stays a

@@ -13,7 +13,7 @@ import { PATCH_TIMEZONE } from '../ec2-management/tagConventions.js';
 // savings-plans-collector.test.ts), @aws-sdk/client-s3 (because the handler reads/writes the cost
 // cache via GetObjectCommand/PutObjectCommand — used to be SSM Parameter Store but the Standard
 // tier only allows up to 4096 bytes/value, so it moved to S3), and @aws-sdk/client-ssm
-// (discordWebhook.ts still reads the Discord webhook URL from an SSM Parameter, unrelated to the
+// (alertHook.ts still reads the alert hook URL from an SSM Parameter, unrelated to the
 // cost cache — uses its own separate client/mock).
 const ceSendMock = vi.fn();
 const s3SendMock = vi.fn();
@@ -36,11 +36,11 @@ vi.mock('@aws-sdk/client-ssm', () => ({
   GetParameterCommand: vi.fn().mockImplementation((input: unknown) => ({ __type: 'getParameter', input })),
 }));
 
-// DISCORD_WEBHOOK_URL_PARAM_NAME is read at the MODULE SCOPE of discordWebhook.ts (same pattern
-// as discord-alarm-notifier.ts) — MUST be set BEFORE this module is imported (dynamic import right
-// below) for postDiscordEmbeds() to get the correct value, not set inside each describe's
+// ALERT_HOOK_URL_PARAM_NAME is read at the MODULE SCOPE of alertHook.ts (same pattern
+// as alarm-notifier.ts) — MUST be set BEFORE this module is imported (dynamic import right
+// below) for postAlertEmbeds() to get the correct value, not set inside each describe's
 // beforeEach (too late by then, the module has already finished loading).
-process.env.DISCORD_WEBHOOK_URL_PARAM_NAME = '/abc/ops-dashboard/prod/discord-webhook-url';
+process.env.ALERT_HOOK_URL_PARAM_NAME = '/abc/ops-dashboard/prod/alert-hook-url';
 
 // Import after the mocks are declared (vi.mock is hoisted to the top by vitest).
 const { handler } = await import('./cost-collector.js');
@@ -57,8 +57,8 @@ beforeEach(() => {
   ssmSendMock.mockReset();
   process.env.ASSESSMENT_BUCKET_NAME = 'test-assessment-bucket';
   process.env.AWS_ACCOUNT_ID = '111111111111';
-  // Discord webhook URL (SSM) — defaults to an empty resolve so tests that don't care about the
-  // notify don't have to mock it themselves; postDiscordEmbeds catches its own errors, doesn't
+  // alert hook URL (SSM) — defaults to an empty resolve so tests that don't care about the
+  // notify don't have to mock it themselves; postAlertEmbeds catches its own errors, doesn't
   // throw even when the webhook is missing.
   ssmSendMock.mockImplementation(() => Promise.reject(new Error('ParameterNotFound')));
 });
@@ -86,7 +86,7 @@ function mockCostExplorerResponses(dailyResultsByTime: unknown[]): void {
   });
   // First run in the test: GetObjectCommand (reads the old cache) rejects (object doesn't exist
   // yet) -> treated as no old cache (per readCachedCostData). PutObjectCommand succeeds normally.
-  // The default threshold (forecast=0, previousMonth=0) is 'ok' -> no Discord notify.
+  // The default threshold (forecast=0, previousMonth=0) is 'ok' -> no alert hub notify.
   s3SendMock.mockImplementation((command: { __type: string }) => {
     if (command.__type === 'getObject') return Promise.reject(new Error('NoSuchKey'));
     return Promise.resolve({});
@@ -267,13 +267,13 @@ describe('cost-collector handler — forecastAvailable (does not hide a forecast
   });
 });
 
-describe('cost-collector handler — Discord notify when the threshold gets worse', () => {
+describe('cost-collector handler — alert hub notify when the threshold gets worse', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204 });
     vi.stubGlobal('fetch', fetchMock);
-    process.env.DISCORD_WEBHOOK_URL_PARAM_NAME = '/abc/ops-dashboard/prod/discord-webhook-url';
+    process.env.ALERT_HOOK_URL_PARAM_NAME = '/abc/ops-dashboard/prod/alert-hook-url';
   });
 
   function mockCeWithForecast(forecastAmount: string, previousMonthAmount: string): void {
@@ -286,7 +286,7 @@ describe('cost-collector handler — Discord notify when the threshold gets wors
     });
   }
 
-  it('first run (no old cache), current threshold = ok -> does NOT send Discord', async () => {
+  it('first run (no old cache), current threshold = ok -> does NOT send alert hub', async () => {
     mockCeWithForecast('0', '100'); // forecast=0+mtd(0)=0, previousMonth=100 -> forecast is much lower -> ok
     s3SendMock.mockImplementation((command: { __type: string }) => {
       if (command.__type === 'getObject') return Promise.reject(new Error('NoSuchKey'));
@@ -298,25 +298,26 @@ describe('cost-collector handler — Discord notify when the threshold gets wors
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('first run (no old cache), current threshold = critical -> STILL sends Discord immediately', async () => {
+  it('first run (no old cache), current threshold = critical -> STILL sends alert hub immediately', async () => {
     mockCeWithForecast('200', '100'); // forecast=200+mtd(0)=200, previousMonth=100 -> 200 >= 100*1.3 -> critical
-    // Old cache read from S3 (doesn't exist yet) -> rejects; Discord webhook URL read from SSM
+    // Old cache read from S3 (doesn't exist yet) -> rejects; alert hook URL read from SSM
     // (webhook already configured) -> resolves. 2 different clients (s3SendMock/ssmSendMock) so
     // there's no need to distinguish by Name like when both used SSM before.
     s3SendMock.mockImplementation((command: { __type: string }) => {
       if (command.__type === 'getObject') return Promise.reject(new Error('NoSuchKey'));
       return Promise.resolve({});
     });
-    ssmSendMock.mockImplementation(() => Promise.resolve({ Parameter: { Value: 'https://discord.com/api/webhooks/test-id/test-token' } }));
+    ssmSendMock.mockImplementation(() => Promise.resolve({ Parameter: { Value: 'https://rt.example.test/hooks/alert/test-token' } }));
 
     await handler();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.embeds[0].title).toContain('CRITICAL');
+    expect(body.severity).toBe('critical');
+    expect(body.title).toContain('CRITICAL');
   });
 
-  it('old cache threshold=ok, this run threshold=warn -> sends Discord (got worse)', async () => {
+  it('old cache threshold=ok, this run threshold=warn -> sends alert hub (got worse)', async () => {
     mockCeWithForecast('115', '100'); // forecast=115, previousMonth=100 -> 115 >= 100*1.1 -> warn
     s3SendMock.mockImplementation((command: { __type: string }) => {
       if (command.__type === 'getObject') {
@@ -332,7 +333,7 @@ describe('cost-collector handler — Discord notify when the threshold gets wors
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('old cache threshold=critical, this run threshold=warn (improved) -> does NOT send Discord', async () => {
+  it('old cache threshold=critical, this run threshold=warn (improved) -> does NOT send alert hub', async () => {
     mockCeWithForecast('115', '100'); // forecast=115 -> warn
     s3SendMock.mockImplementation((command: { __type: string }) => {
       if (command.__type === 'getObject') {
@@ -348,7 +349,7 @@ describe('cost-collector handler — Discord notify when the threshold gets wors
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('old cache and this run at the SAME warn level (unchanged) -> does NOT send Discord', async () => {
+  it('old cache and this run at the SAME warn level (unchanged) -> does NOT send alert hub', async () => {
     mockCeWithForecast('115', '100'); // forecast=115 -> warn
     s3SendMock.mockImplementation((command: { __type: string }) => {
       if (command.__type === 'getObject') {
@@ -366,7 +367,7 @@ describe('cost-collector handler — Discord notify when the threshold gets wors
 
   it('the embed explains the +10%/+30% standard being applied (the "how")', async () => {
     mockCeWithForecast('200', '100'); // -> critical
-    ssmSendMock.mockImplementation(() => Promise.resolve({ Parameter: { Value: 'https://discord.com/api/webhooks/test-id/test-token' } }));
+    ssmSendMock.mockImplementation(() => Promise.resolve({ Parameter: { Value: 'https://rt.example.test/hooks/alert/test-token' } }));
     s3SendMock.mockImplementation((command: { __type: string }) => {
       if (command.__type === 'getObject') return Promise.reject(new Error('NoSuchKey'));
       return Promise.resolve({});
@@ -375,9 +376,9 @@ describe('cost-collector handler — Discord notify when the threshold gets wors
     await handler();
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    const howField = body.embeds[0].fields.find((f: { name: string }) => f.name === '🛠️ Next steps');
-    expect(howField.value).toContain('10%');
-    expect(howField.value).toContain('30%');
+    const howBlock = (body.text as string).split('\n\n').find((b) => b.startsWith('**🛠️ Next steps**'));
+    expect(howBlock).toContain('10%');
+    expect(howBlock).toContain('30%');
   });
 
   it('includes a "Biggest cost increases" field listing services whose cost grew since the last cache', async () => {
@@ -392,7 +393,7 @@ describe('cost-collector handler — Discord notify when the threshold gets wors
       }
       return Promise.resolve({ ResultsByTime: [{ Total: { UnblendedCost: { Amount: '100' } } }] });
     });
-    ssmSendMock.mockImplementation(() => Promise.resolve({ Parameter: { Value: 'https://discord.com/api/webhooks/test-id/test-token' } }));
+    ssmSendMock.mockImplementation(() => Promise.resolve({ Parameter: { Value: 'https://rt.example.test/hooks/alert/test-token' } }));
     s3SendMock.mockImplementation((command: { __type: string }) => {
       if (command.__type === 'getObject') {
         return Promise.resolve({
@@ -416,8 +417,8 @@ describe('cost-collector handler — Discord notify when the threshold gets wors
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    const moversField = body.embeds[0].fields.find((f: { name: string }) => f.name.startsWith('Biggest cost increases'));
-    expect(moversField).toBeDefined();
-    expect(moversField.value).toContain('Amazon EC2');
+    const moversBlock = (body.text as string).split('\n\n').find((b) => b.startsWith('**Biggest cost increases'));
+    expect(moversBlock).toBeDefined();
+    expect(moversBlock).toContain('Amazon EC2');
   });
 });

@@ -11,7 +11,7 @@ import { MONITORING_EXEMPT_TAG_KEY } from '../ec2-management/thresholds.js';
 // Lean_Lambda_Exception (Requirement 6.4a): direct imports, not `../alerting/index.js` — see the
 // exception comment in `agent/ai-ops-agent.ts` (same reason):
 // `governance-exemption-auditor-fn` is a lean standalone Lambda.
-import { postDiscordEmbeds } from '../alerting/discordWebhook.js';
+import { postAlertEmbeds } from '../alerting/alertHook.js';
 import { buildOpsNotificationEmbed } from '../alerting/opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 
@@ -31,7 +31,7 @@ import { logger } from '../../shared-kernel/logger.js';
  * Both are DELIBERATELY reversible, temporary exceptions — but a tag, once set, sits there forever
  * unless someone remembers to go back and check it. This Lambda is that "someone": it re-reads
  * every resource carrying either exemption tag, and if a `SecurityExceptionReviewDate` has already
- * passed, sends a Discord reminder instead of letting the exception silently outlive its intended
+ * passed, sends an alert hub reminder instead of letting the exception silently outlive its intended
  * lifetime — the exact "forgotten monitoring exclusion" risk `alarm-baseline-manager.ts`'s own
  * `ALARM_BASELINE_EXCLUDED_RESOURCES` comment already calls out for its OWN exclusion list ("an
  * exclusion can be forgotten, and forgotten monitoring is exactly how the disk incidents earlier
@@ -70,7 +70,7 @@ export interface ExemptedResource {
 /** Parses `reviewDate` (YYYY-MM-DD, matching how `governance-exemption-auditor`'s own tagging
  * convention was applied — e.g. `2026-10-17`) and compares against `now`. An unparseable date is
  * treated as "not overdue" (fail-safe: never invent an alert from a malformed tag value someone
- * will have to decode from a false-positive Discord message). */
+ * will have to decode from a false-positive alert). */
 export function isReviewOverdue(reviewDate: string | undefined, now: Date): boolean {
   if (!reviewDate) return false;
   const parsed = new Date(`${reviewDate}T00:00:00Z`);
@@ -187,7 +187,7 @@ export async function handler(): Promise<{ ok: true; exempted: number; overdue: 
         },
       ],
     });
-    await postDiscordEmbeds([embed]);
+    await postAlertEmbeds([embed]);
   }
 
   return { ok: true, exempted: allExempted.length, overdue: overdue.length };

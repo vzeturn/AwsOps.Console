@@ -9,7 +9,7 @@ import { evalCostThreshold } from './costThreshold.js';
 // exception comment in `agent/ai-ops-agent.ts` (same reason): `cost-collector-fn` is a lean
 // standalone Lambda and the alerting barrel also re-exports `getAlerts`, which pulls in
 // `monitoring-service.ts`.
-import { postDiscordEmbeds, type DiscordEmbedField } from '../alerting/discordWebhook.js';
+import { postAlertEmbeds, type AlertEmbedField } from '../alerting/alertHook.js';
 import { buildOpsNotificationEmbed, type OpsNotificationSeverity } from '../alerting/opsNotification.js';
 import { monthStart, today, prevMonthRange, last30DaysRange, monthlyHistoryRange } from './costDateRanges.js';
 // Lean_Lambda_Exception (Requirement 6.4a): direct import, not `../ec2-management/index.js` —
@@ -44,10 +44,10 @@ import { COST_CACHE_S3_KEY } from './costCacheKey.js';
  * EXTENSION (requirement: "cost optimization needs to be rolled out effectively and quickly ...
  * to avoid unnecessary cost"): after writing the new cache, compares the NEW `ThresholdMeta` with
  * the OLD `ThresholdMeta` (read back from cache before overwriting) — if the level got worse
- * (ok->warn/critical, warn->critical), proactively sends a Discord Embed IMMEDIATELY instead of
+ * (ok->warn/critical, warn->critical), proactively sends an alert embed IMMEDIATELY instead of
  * waiting for an operator to check the dashboard. This is the first PROACTIVE alert channel for
- * cost, in the same spirit as the existing Discord channel for infra CloudWatch Alarms
- * (`discord-alarm-notifier.ts`) — an abnormal cost deserves the same treatment as an infra alarm,
+ * cost, in the same spirit as the existing the alert hub for infra CloudWatch Alarms
+ * (`alarm-notifier.ts`) — an abnormal cost deserves the same treatment as an infra alarm,
  * not just a number sitting on the dashboard.
  *
  * EXTENSION (requirement: all AWS cost must be fully allocated to SALE/MKT/HR/SERVICE, with
@@ -92,7 +92,7 @@ async function readCachedCostData(bucketName: string): Promise<Omit<CostData, 't
 const LEVEL_SEVERITY: Record<string, number> = { ok: 0, warn: 1, critical: 2 };
 
 /**
- * `true` when the cost situation got WORSE enough to be worth a proactive Discord notification:
+ * `true` when the cost situation got WORSE enough to be worth a proactive alert:
  * - There's an old cache (`oldLevel` is defined) AND the new severity is HIGHER than the old one
  *   (ok->warn, ok->critical, warn->critical) — this is a real CHANGE worth reporting.
  * - OR there's no old cache (first run — `oldLevel === undefined`, e.g. the Lambda was just
@@ -101,8 +101,8 @@ const LEVEL_SEVERITY: Record<string, number> = { ok: 0, warn: 1, critical: 2 };
  *   previous run to compare against".
  *
  * Does NOT send when: the level stays the same, improves (critical->warn/ok, warn->ok — the
- * dashboard showing it is enough, no need for Discord), OR it's the first run and the level is
- * already 'ok' (nothing abnormal to report — avoids sending a Discord message on the Lambda's very
+ * dashboard showing it is enough, no need for alert hub), OR it's the first run and the level is
+ * already 'ok' (nothing abnormal to report — avoids sending an alert on the Lambda's very
  * first run even though nothing is wrong). Pure function.
  */
 export function shouldNotifyCostThresholdWorsened(oldLevel: string | undefined, newLevel: string): boolean {
@@ -140,7 +140,7 @@ function buildCostThresholdEmbed(params: {
   const severity: OpsNotificationSeverity = params.level === 'critical' ? 'critical' : 'warning';
   const deltaVsPreviousMonthUsd = params.forecastMonthUsd - params.previousMonthUsd;
 
-  const extra: DiscordEmbedField[] = [
+  const extra: AlertEmbedField[] = [
     { name: 'Month-to-date cost', value: fmt(params.monthToDateUsd), inline: true },
     { name: 'End-of-month forecast', value: fmt(params.forecastMonthUsd), inline: true },
     { name: 'Previous month', value: fmt(params.previousMonthUsd), inline: true },
@@ -327,9 +327,9 @@ export async function handler(): Promise<{ ok: true }> {
     }),
   );
 
-  // Proactive Discord notify when the threshold got WORSE compared to the previous run (see the
+  // Proactive alert hub notify when the threshold got WORSE compared to the previous run (see the
   // comment at the top of the file) — must NOT throw/block the main job if sending fails
-  // (postDiscordEmbeds already catches its own internal errors).
+  // (postAlertEmbeds already catches its own internal errors).
   const newThreshold = evalCostThreshold(forecastMonthUsd, previousMonthUsd);
   const oldThreshold = previousCache ? evalCostThreshold(previousCache.forecastMonthUsd, previousCache.previousMonthUsd) : undefined;
   if (shouldNotifyCostThresholdWorsened(oldThreshold?.level, newThreshold.level)) {
@@ -339,7 +339,7 @@ export async function handler(): Promise<{ ok: true }> {
     const topIncreasedServices: CostServiceMover[] = previousCache
       ? computeTopServiceMovers(byService, previousCache.byService).increased
       : [];
-    await postDiscordEmbeds([
+    await postAlertEmbeds([
       buildCostThresholdEmbed({
         level: newThreshold.level,
         reason: newThreshold.reason,

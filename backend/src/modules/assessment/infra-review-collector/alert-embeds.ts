@@ -5,7 +5,7 @@ import { getRunbookForFinding } from '@ops-dashboard/shared';
 import { sumEstimatedMonthlySavings } from '../../cost/costReporting.js';
 // Lean_Lambda_Exception (Requirement 6.4a): direct imports, not `../../alerting/index.js` — see
 // the exception comment in `assessment-report-builder.ts` (same module, same reason).
-import { type DiscordEmbed } from '../../alerting/discordWebhook.js';
+import { type AlertEmbed } from '../../alerting/alertHook.js';
 import { buildOpsNotificationEmbed } from '../../alerting/opsNotification.js';
 // Lean_Lambda_Exception (Requirement 6.4a): direct import, not `../../governance/index.js` — see
 // the exception comment in `assessment-report-builder.ts` (same module, same reason):
@@ -14,7 +14,7 @@ import { buildOpsNotificationEmbed } from '../../alerting/opsNotification.js';
 // module scope.
 import { NO_AUTO_RIGHTSIZE_TAG_KEY } from '../../governance/ec2AutoRightsizing.js';
 
-export function buildNewFindingsEmbed(newFindings: RecommendationItem[]): DiscordEmbed {
+export function buildNewFindingsEmbed(newFindings: RecommendationItem[]): AlertEmbed {
   const totalSavingsUsd = sumEstimatedMonthlySavings(newFindings);
   const fmt = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
@@ -53,7 +53,7 @@ export function buildNewFindingsEmbed(newFindings: RecommendationItem[]): Discor
   });
 }
 
-/** Discord Embed announcing that an instance was NEWLY added to the auto-rightsize queue —
+/** alert embed announcing that an instance was NEWLY added to the auto-rightsize queue —
  * shown BEFORE the real change happens (the real change only occurs the next time the instance
  * stops, performed by `ec2-rightsize-applier.ts`), giving the operator a chance to set the
  * exempt tag (`NO_AUTO_RIGHTSIZE_TAG_KEY`) if they disagree before the type change actually
@@ -62,12 +62,12 @@ export function buildNewFindingsEmbed(newFindings: RecommendationItem[]): Discor
  * same "oversized" condition `ec2LowCpu` documents, 'up' is the same "AWS Compute Optimizer
  * confirms underprovisioned" condition `ec2Underprovisioned` documents. Reusing those runbooks
  * (rather than writing separate ad-hoc guidance here) means the dashboard's own Runbook drawer and
- * this Discord notification always agree on the escalation condition. */
+ * this alert always agree on the escalation condition. */
 function runbookFindingTypeForDirection(direction: 'up' | 'down'): 'ec2Underprovisioned' | 'ec2LowCpu' {
   return direction === 'up' ? 'ec2Underprovisioned' : 'ec2LowCpu';
 }
 
-export function buildAutoRightsizeQueuedEmbed(items: { instanceId: string; name: string; direction: 'up' | 'down' }[]): DiscordEmbed {
+export function buildAutoRightsizeQueuedEmbed(items: { instanceId: string; name: string; direction: 'up' | 'down' }[]): AlertEmbed {
   const fields = items.slice(0, 10).map((item) => {
     const runbook = getRunbookForFinding(runbookFindingTypeForDirection(item.direction));
     const action =

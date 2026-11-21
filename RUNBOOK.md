@@ -24,11 +24,11 @@ GuardDuty/RDS event messages, not only CloudWatch Alarms; `ec2-rightsize-applier
 got the `governance-` prefix — both auto-adjust EC2 sizing on a policy, the same family as
 `patch-scheduler`/`downsize-scheduler`.)
 
-## 1. When a Discord alert comes in
+## 1. When an alert comes in (Request Tracking hub)
 
 Every CloudWatch Alarm in the stack (8 Lambda Errors alarms from Phase B + the standard EC2/RDS/ALB/ECS
 alarm set managed by `alerting-baseline-manager-fn`) is sent via `AlarmNotificationTopic` (SNS) →
-`alerting-notifier-fn` → Discord webhook. There is NO email fallback. `alerting-notifier-fn` is also the
+`alerting-notifier-fn` → Request Tracking hub alert hook (RT-0490; Discord was retired). Warning/critical alerts open an incident request on the hub; info/OK alerts are only logged (`alert-notification` in CloudWatch Logs). The 15-minute `alerting-health-report-fn` summary is log-only too (each ALARM transition already has its own hub incident). There is NO email fallback. `alerting-notifier-fn` is also the
 sole subscriber of the account's security-alerts topic (CIS Benchmark alarms) and the GuardDuty
 Finding EventBridge rule — see section 5.
 
@@ -48,7 +48,7 @@ aws logs tail /aws/lambda/abc-ops-dashboard-prod-<function-suffix>-fn --since 1h
 | `action-execution-fn-errors` | `.../action-execution-fn` | A specific user-triggered action failed — see `action-audit/` in S3 |
 | `web-router-fn-errors` | `.../web-router-fn` | Request from the frontend failed — check Entra auth, downstream service |
 | `web-static-fn-errors` | `.../web-static-fn` | Static asset serving error (rare) |
-| `alerting-baseline-manager-fn-errors` | `.../alerting-baseline-manager-fn` | PutMetricAlarm/DeleteAlarms error — see the dedicated Discord embed (Task 4) for count details |
+| `alerting-baseline-manager-fn-errors` | `.../alerting-baseline-manager-fn` | PutMetricAlarm/DeleteAlarms error — see the dedicated alert (Task 4) for count details |
 | `alerting-topic-guardian-fn-errors` | `.../alerting-topic-guardian-fn` | Failed to list SNS topics/subscriptions — check `sns:ListTopics`/`ListSubscriptionsByTopic` IAM |
 | `security-guardduty-triage-fn-errors` | `.../security-guardduty-triage-fn` | Failed to archive a finding/tag lookup — check `guardduty:ArchiveFindings`/`ec2:DescribeTags` IAM |
 | `security-public-bucket-guardian-fn-errors` | `.../security-public-bucket-guardian-fn` | Failed to list buckets/policy status — check `s3:GetBucketPolicyStatus`/`GetBucketTagging` IAM |
@@ -118,7 +118,7 @@ that is intentional, and GuardDuty findings caused by sanctioned activity that s
 below turns that one-time manual check into a recurring, automatic one — same "reconcile loop" pattern as
 `alerting-baseline-manager-fn`.
 
-| Lambda | Schedule | What it checks | Discord embed fires when |
+| Lambda | Schedule | What it checks | Alert fires when |
 |---|---|---|---|
 | `alerting-topic-guardian-fn` | `rate(1 day)` | Every SNS topic with `AlarmActions`/GuardDuty/RDS-event subscribers | A topic used for alerting has 0 confirmed subscriptions |
 | `security-guardduty-triage-fn` | GuardDuty Finding EventBridge rule | New/updated finding vs. the affected resource's `SecurityException` tag | The resource has NO exception tag (auto-archives + stays silent when it DOES have one) |
@@ -126,7 +126,7 @@ below turns that one-time manual check into a recurring, automatic one — same 
 | `governance-exemption-auditor-fn` | `rate(1 day)` | Every `ops-dashboard:monitoring-exempt`/`SecurityException*` tag vs. its `SecurityExceptionReviewDate` | An exemption's review date has passed (nobody re-confirmed it's still needed) |
 | `security-endpoint-drift-detector-fn` | `rate(1 day)` via SSM RunCommand | Running processes matching known VPN/tunnel binaries (tailscaled/netbird/cloudflared) on every SSM-managed instance | A VPN/tunnel process is found on an instance with NO `SecurityException` tag |
 
-All 5 post through the same `AlarmNotificationTopic` → `alerting-notifier-fn` → Discord path as every other
+All 5 post through the same `AlarmNotificationTopic` → `alerting-notifier-fn` → hub alert hook path as every other
 alarm in section 1 — no new notification channel was added. None of them mutate anything (archiving a
 GuardDuty finding is the only exception, and only when a `SecurityException` tag already justifies it);
 they only read and notify, same trust level as `collector-*`/`alerting-baseline-manager-fn`.

@@ -14,7 +14,7 @@ process.env.ASSESSMENT_BUCKET_NAME = 'test-assessment-bucket';
 
 const s3SendMock = vi.fn();
 const ec2SendMock = vi.fn();
-const postDiscordEmbedsMock = vi.fn();
+const postAlertEmbedsMock = vi.fn();
 
 vi.mock('@aws-sdk/client-s3', () => ({
   S3Client: vi.fn().mockImplementation(() => ({ send: s3SendMock })),
@@ -30,8 +30,8 @@ vi.mock('@aws-sdk/client-ec2', () => ({
   DescribeInstanceTypesCommand: vi.fn().mockImplementation((input: unknown) => ({ __type: 'describeInstanceTypes', input })),
 }));
 
-vi.mock('../alerting/discordWebhook.js', () => ({
-  postDiscordEmbeds: postDiscordEmbedsMock,
+vi.mock('../alerting/alertHook.js', () => ({
+  postAlertEmbeds: postAlertEmbedsMock,
 }));
 
 const collectEc2Mock = vi.fn();
@@ -143,7 +143,7 @@ function mockAllCollectorsWithValidData(): void {
   s3SendMock.mockResolvedValue({});
   // Default: no clear peak pattern (empty metrics) + no team override -> time-of-day
   // sizing action:'none' for every eligible instance (hasScheduleTag + running), keeps the existing
-  // EC2_AutoRightsize tests' behavior unchanged (only asserts ec2SendMock/postDiscordEmbedsMock).
+  // EC2_AutoRightsize tests' behavior unchanged (only asserts ec2SendMock/postAlertEmbedsMock).
   collectHourlyMetricsMock.mockResolvedValue([]);
   getTeamOverrideMock.mockResolvedValue({ scaleMarginPercent: 0, minInstanceType: undefined, maxInstanceType: undefined, optOut: false });
   putComputedScheduleMock.mockResolvedValue(undefined);
@@ -161,8 +161,8 @@ beforeEach(() => {
   s3SendMock.mockReset();
   ec2SendMock.mockReset();
   ec2SendMock.mockResolvedValue({});
-  postDiscordEmbedsMock.mockReset();
-  postDiscordEmbedsMock.mockResolvedValue(undefined);
+  postAlertEmbedsMock.mockReset();
+  postAlertEmbedsMock.mockResolvedValue(undefined);
   collectHourlyMetricsMock.mockReset();
   getTeamOverrideMock.mockReset();
   putComputedScheduleMock.mockReset();
@@ -523,7 +523,7 @@ describe('infra-review-collector handler', () => {
       lastAutoRightsizeDate: undefined,
     };
 
-    it('Compute Optimizer confirms Overprovisioned for an instance with a schedule tag -> CreateTags pending-auto-rightsize=down + Discord notify', async () => {
+    it('Compute Optimizer confirms Overprovisioned for an instance with a schedule tag -> CreateTags pending-auto-rightsize=down + alert hub notify', async () => {
       mockAllCollectorsWithValidData();
       collectEc2Mock.mockResolvedValue([SCHEDULED_ITEM]);
       collectComputeOptimizerDataMock.mockResolvedValue({
@@ -541,7 +541,7 @@ describe('infra-review-collector handler', () => {
       const input = (createTagsCall![0] as { input: { Resources: string[]; Tags: { Key: string; Value: string }[] } }).input;
       expect(input.Resources).toEqual(['i-scheduled1']);
       expect(input.Tags).toEqual([{ Key: 'OpsDashboard:PendingAutoRightsize', Value: 'down' }]);
-      expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
+      expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
     });
 
     it('Compute Optimizer confirms Underprovisioned -> CreateTags pending-auto-rightsize=up', async () => {
@@ -574,7 +574,7 @@ describe('infra-review-collector handler', () => {
       await handler();
 
       expect(ec2SendMock.mock.calls.some((c) => (c[0] as { __type: string }).__type === 'createTags')).toBe(false);
-      expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+      expect(postAlertEmbedsMock).not.toHaveBeenCalled();
     });
 
     it('instance with an exempt tag -> does NOT CreateTags', async () => {
@@ -607,8 +607,8 @@ describe('infra-review-collector handler', () => {
       const deleteTagsCall = ec2SendMock.mock.calls.find((c) => (c[0] as { __type: string }).__type === 'deleteTags');
       expect(deleteTagsCall).toBeDefined();
       expect((deleteTagsCall![0] as { input: { Resources: string[] } }).input.Resources).toEqual(['i-scheduled1']);
-      // clearPending does NOT send a Discord notify (only setPending notifies — see buildAutoRightsizeQueuedEmbed).
-      expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+      // clearPending does NOT send an alert hub notify (only setPending notifies — see buildAutoRightsizeQueuedEmbed).
+      expect(postAlertEmbedsMock).not.toHaveBeenCalled();
     });
 
     it('already has a pending in the CURRENT correct direction -> does NOT CreateTags/DeleteTags again (idempotent), does NOT notify again', async () => {
@@ -624,7 +624,7 @@ describe('infra-review-collector handler', () => {
       await handler();
 
       expect(ec2SendMock).not.toHaveBeenCalled();
-      expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+      expect(postAlertEmbedsMock).not.toHaveBeenCalled();
     });
 
     it('within the cooldown period -> does NOT CreateTags even if Compute Optimizer confirms a new direction', async () => {

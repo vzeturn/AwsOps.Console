@@ -10,14 +10,14 @@ vi.mock('@aws-sdk/client-sns', () => ({
   ListSubscriptionsByTopicCommand: vi.fn().mockImplementation((input: unknown) => ({ __cmd: 'ListSubscriptionsByTopic', input })),
 }));
 
-const postDiscordEmbedsMock = vi.fn();
-vi.mock('./discordWebhook.js', () => ({ postDiscordEmbeds: postDiscordEmbedsMock }));
+const postAlertEmbedsMock = vi.fn();
+vi.mock('./alertHook.js', () => ({ postAlertEmbeds: postAlertEmbedsMock }));
 
 const { handler, findOrphanedTopics } = await import('./alerting-topic-guardian.js');
 
 beforeEach(() => {
   snsSendMock.mockReset();
-  postDiscordEmbedsMock.mockReset();
+  postAlertEmbedsMock.mockReset();
 });
 
 describe('findOrphanedTopics', () => {
@@ -36,7 +36,7 @@ describe('findOrphanedTopics', () => {
 });
 
 describe('handler', () => {
-  it('posts a Discord embed listing every topic with 0 subscribers, leaves healthy topics out', async () => {
+  it('posts an alert embed listing every topic with 0 subscribers, leaves healthy topics out', async () => {
     snsSendMock.mockImplementation((command: { __cmd: string; input?: { TopicArn?: string } }) => {
       if (command.__cmd === 'ListTopics') {
         return Promise.resolve({ Topics: [{ TopicArn: 'arn:aws:sns:ap-southeast-1:1:orphaned' }, { TopicArn: 'arn:aws:sns:ap-southeast-1:1:healthy' }] });
@@ -51,8 +51,8 @@ describe('handler', () => {
     const result = await handler();
 
     expect(result).toEqual({ ok: true, checked: 2, orphaned: 1 });
-    expect(postDiscordEmbedsMock).toHaveBeenCalledTimes(1);
-    const embeds = postDiscordEmbedsMock.mock.calls[0][0];
+    expect(postAlertEmbedsMock).toHaveBeenCalledTimes(1);
+    const embeds = postAlertEmbedsMock.mock.calls[0][0];
     expect(embeds[0].title).toContain('1 SNS topic');
     expect(JSON.stringify(embeds[0].fields)).toContain('arn:aws:sns:ap-southeast-1:1:orphaned');
     expect(JSON.stringify(embeds[0].fields)).not.toContain('arn:aws:sns:ap-southeast-1:1:healthy');
@@ -68,7 +68,7 @@ describe('handler', () => {
     const result = await handler();
 
     expect(result).toEqual({ ok: true, checked: 1, orphaned: 0 });
-    expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+    expect(postAlertEmbedsMock).not.toHaveBeenCalled();
   });
 
   it('paginates ListTopics/ListSubscriptionsByTopic via NextToken', async () => {
@@ -107,6 +107,6 @@ describe('handler', () => {
 
     // The broken topic is excluded from `checked` entirely — never counted as orphaned.
     expect(result).toEqual({ ok: true, checked: 1, orphaned: 0 });
-    expect(postDiscordEmbedsMock).not.toHaveBeenCalled();
+    expect(postAlertEmbedsMock).not.toHaveBeenCalled();
   });
 });

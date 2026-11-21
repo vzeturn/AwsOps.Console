@@ -22,7 +22,7 @@ import { PRE_PEAK_LEAD_MINUTES } from './timeOfDayPolicy.js';
 // Lean_Lambda_Exception (Requirement 6.4a): direct imports, not `../alerting/index.js` — see the
 // exception comment in `agent/ai-ops-agent.ts` (same reason): `time-of-day-trigger-fn` is a lean
 // standalone Lambda.
-import { postDiscordEmbeds } from '../alerting/discordWebhook.js';
+import { postAlertEmbeds } from '../alerting/alertHook.js';
 import { buildOpsNotificationEmbed } from '../alerting/opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 import type { DownsizeSchedulerEvent } from './downsize-scheduler.js';
@@ -238,12 +238,12 @@ export async function handler(): Promise<TimeOfDayTriggerResult> {
         footer: 'ops-dashboard · Time-of-Day Sizing',
         extra: triggeredNames.slice(0, 10).map((t) => ({ name: t.instanceId, value: `Target type: \`${t.targetType}\``, inline: false })),
       });
-      await postDiscordEmbeds([embed]);
+      await postAlertEmbeds([embed]);
     } catch (err) {
-      // N2: the resize was already invoked before this point — a Discord error here must NOT be
+      // N2: the resize was already invoked before this point — an alert hub error here must NOT be
       // thrown, otherwise the EventBridge Scheduler retry (MaximumRetryAttempts: 2) would re-run the
       // whole handler and could invoke the resize AGAIN for the same instance (duplicate resize).
-      logger.error('time-of-day-trigger: postDiscordEmbeds failed (resize was already invoked, not throwing to avoid a duplicate EventBridge retry)', err);
+      logger.error('time-of-day-trigger: postAlertEmbeds failed (resize was already invoked, not throwing to avoid a duplicate EventBridge retry)', err);
     }
   }
 

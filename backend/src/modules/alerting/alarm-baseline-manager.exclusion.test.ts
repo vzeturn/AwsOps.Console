@@ -44,7 +44,7 @@ vi.mock('@aws-sdk/client-ecs', () => ({
   ListServicesCommand: vi.fn().mockImplementation((input: unknown) => ({ input })),
   DescribeServicesCommand: vi.fn().mockImplementation((input: unknown) => ({ input })),
 }));
-vi.mock('./discordWebhook.js', () => ({ postDiscordEmbeds: vi.fn() }));
+vi.mock('./alertHook.js', () => ({ postAlertEmbeds: vi.fn() }));
 
 const { buildDesiredAlarmSpecs, buildHostAlarmSpecs, isExcludedResource } = await import(
   './alarm-baseline-manager.js'

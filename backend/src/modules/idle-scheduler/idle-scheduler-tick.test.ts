@@ -45,7 +45,7 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
   GetMetricStatisticsCommand: vi.fn().mockImplementation((input: unknown) => ({ __type: 'GetMetricStatistics', input })),
 }));
 
-vi.mock('../alerting/discordWebhook.js', () => ({ postDiscordEmbeds: vi.fn() }));
+vi.mock('../alerting/alertHook.js', () => ({ postAlertEmbeds: vi.fn() }));
 
 const { handler } = await import('./idle-scheduler-tick.js');
 

@@ -1,7 +1,7 @@
 // Lean_Lambda_Exception (Requirement 6.4a): direct imports, not `../alerting/index.js` — see the
 // exception comment in `agent/ai-ops-agent.ts` (same reason):
 // `security-public-bucket-guardian-fn` is a lean standalone Lambda.
-import { postDiscordEmbeds } from '../alerting/discordWebhook.js';
+import { postAlertEmbeds } from '../alerting/alertHook.js';
 import { buildOpsNotificationEmbed } from '../alerting/opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 import { collectBucketPublicStatuses, findUnexplainedPublicBuckets } from './security-public-bucket-status.js';
@@ -74,7 +74,7 @@ export async function handler(): Promise<{ ok: true; checked: number; unexplaine
         },
       ],
     });
-    await postDiscordEmbeds([embed]);
+    await postAlertEmbeds([embed]);
   }
 
   return { ok: true, checked: statuses.length, unexplainedPublic: flagged.length };

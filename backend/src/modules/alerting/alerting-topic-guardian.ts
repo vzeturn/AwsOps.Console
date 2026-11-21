@@ -1,6 +1,6 @@
 import { ListTopicsCommand, ListSubscriptionsByTopicCommand } from '@aws-sdk/client-sns';
 import { getSnsClient } from '../../core/aws-clients.js';
-import { postDiscordEmbeds } from './discordWebhook.js';
+import { postAlertEmbeds } from './alertHook.js';
 import { buildOpsNotificationEmbed } from './opsNotification.js';
 import { logger } from '../../shared-kernel/logger.js';
 
@@ -131,7 +131,7 @@ export async function handler(): Promise<{ ok: true; checked: number; orphaned: 
         },
       ],
     });
-    await postDiscordEmbeds([embed]);
+    await postAlertEmbeds([embed]);
   }
 
   return { ok: true, checked: statuses.length, orphaned: orphaned.length };

@@ -23,7 +23,7 @@
  *   `LAST_AUTO_RIGHTSIZE_DATE_TAG_KEY`/`evaluateAutoRightsizeCandidates`/
  *   `classifyComputeOptimizerDirection` (ec2AutoRightsizing.ts) — imported by
  *   `modules/infra/ec2-collector.ts`, `infra-review-collector/assessment-report-builder.ts`,
- *   `infra-review-collector/rightsize-decision.ts`, `infra-review-collector/discord-embeds.ts`.
+ *   `infra-review-collector/rightsize-decision.ts`, `infra-review-collector/alert-embeds.ts`.
  * - `decideTimeOfDaySizing`/`computeOffPeakType`/`computePeakType`/`type HourlyMetricPoint`
  *   (timeOfDayPolicy.ts) — imported by `infra-review-collector/assessment-report-builder.ts`,
  *   `collectors/time-of-day-collector.ts`.
